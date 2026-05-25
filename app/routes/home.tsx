@@ -43,7 +43,9 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.stage,
             q.note,
             a.name as am_name,
-            q.deal_flow
+            q.deal_flow,
+            q.expected_quarter,
+            q.contract_type
         FROM quotes q
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
@@ -102,6 +104,8 @@ export async function loader({ request }: Route.LoaderArgs) {
             noteList, // 펼쳤을 때 역순으로 보여줄 비고 리스트
             am_name: row.am_name,
             dealFlowList, // 화살표로 연결하여 보여줄 deal flow 리스트
+            expected_quarter: row.expected_quarter,
+            contract_type: row.contract_type,
             updated_at: row.updated_at, // 정렬 처리를 위한 원본 데이터 보존
             updatedAtDate: new Date(row.updated_at).toLocaleDateString("ko-KR"), // 타임스탬프를 YYYY. MM. DD. 형식으로 변환
         };
@@ -190,6 +194,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 <table className="w-full text-left border-collapse">
                     <thead>
                         <tr className="bg-gray-100 dark:bg-gray-700 border-b dark:border-gray-600 text-gray-800 dark:text-gray-200 divide-x divide-gray-200 dark:divide-gray-600">
+                            {renderTh("예상 분기", "expected_quarter")}
                             {renderTh("고객사", "client_company")}
                             {renderTh("파트너사", "partner_company")}
                             {renderTh("파트너 담당자", "partner_contact_name")}
@@ -206,6 +211,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                     className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/50 text-gray-700 dark:text-gray-300 cursor-pointer divide-x divide-gray-200 dark:divide-gray-700"
                                     onClick={() => toggleRow(quote.id)}
                                 >
+                                    <td className="p-4">
+                                        {quote.expected_quarter}
+                                    </td>
                                     <td className="p-4">
                                         {quote.client_company}
                                     </td>
@@ -230,7 +238,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                 {/* 펼쳐진 영역 상세 내용 */}
                                 {expandedRows.has(quote.id) && (
                                     <tr className="bg-blue-50/50 dark:bg-slate-700/50 border-b dark:border-gray-600 shadow-inner">
-                                        <td colSpan={7} className="p-6">
+                                        <td colSpan={8} className="p-6">
                                             <div className="space-y-6">
                                                 {/* 0. 담당자 및 영업 요약 정보 */}
                                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-white dark:bg-gray-800 p-5 rounded border border-gray-200 dark:border-gray-600">
@@ -295,6 +303,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                             <p>
                                                                 AM 이름:{" "}
                                                                 {quote.am_name ||
+                                                                    ""}
+                                                            </p>
+                                                            <p>
+                                                                계약방식:{" "}
+                                                                {quote.contract_type ||
                                                                     ""}
                                                             </p>
                                                             <p className="flex flex-wrap gap-1">
@@ -416,6 +429,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     {
                                                                                         prod.DC달러
                                                                                     }
+
                                                                                     %
                                                                                 </td>
                                                                                 <td className="p-3 text-right">
