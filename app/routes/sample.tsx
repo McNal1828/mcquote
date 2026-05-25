@@ -19,7 +19,7 @@ export const links: Route.LinksFunction = () => [
 // 서버에서 브라우저로 응답할 때 보낼 HTTP 헤더를 설정합니다. (캐시 제어에 유용)
 export function headers({ loaderHeaders }: Route.HeadersArgs) {
     return {
-        // "Cache-Control": "max-age=3600, s-maxage=3600",
+        "Cache-Control": "max-age=3600, s-maxage=3600",
     };
 }
 
@@ -27,8 +27,8 @@ export function headers({ loaderHeaders }: Route.HeadersArgs) {
 // 페이지의 제목(title), 설명(description) 등 HTML <meta> 태그를 설정합니다.
 export function meta({ data }: Route.MetaArgs) {
     return [
-        { title: "견적관리" },
-        { name: "description", content: "McNal의 견적관리 프로젝트" },
+        { title: "New React Router App" },
+        { name: "description", content: "Welcome to React Router!" },
     ];
 }
 
