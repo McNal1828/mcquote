@@ -27,9 +27,9 @@ export const links: Route.LinksFunction = () => [
 const navItems = [
     { path: "/", label: "견적 목록" },
     { path: "/quoting", label: "견적 등록" },
+    { path: "/products", label: "제품 목록" },
     { path: "/ams", label: "AM 목록" },
     { path: "/partners", label: "파트너사 목록" },
-    { path: "/products", label: "제품 목록" },
     { path: "/contacts", label: "파트너사 담당자 목록" },
 ];
 

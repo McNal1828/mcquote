@@ -12,7 +12,17 @@ export async function loader({ request }: Route.LoaderArgs) {
     // 제품(products) 목록을 DB에서 불러옵니다.
     const stmt = db.prepare("SELECT code, description, lpd, lpw FROM products");
     const products = stmt.all();
-    return { products };
+
+    const partners = db
+        .prepare("SELECT id, name FROM partners ORDER BY name ASC")
+        .all();
+    const partnerContacts = db
+        .prepare(
+            "SELECT id, partner_id, name, email, phone FROM partner_contacts ORDER BY name ASC",
+        )
+        .all();
+    const ams = db.prepare("SELECT id, name FROM ams ORDER BY name ASC").all();
+    return { products, partners, partnerContacts, ams };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -32,8 +42,6 @@ export async function action({ request }: Route.ActionArgs) {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        // TODO: partner_id, partner_contact_id, am_id는 별도 테이블과 연결되는 외래키입니다.
-        // 현재는 이름만 텍스트로 받고 있으므로 임시값(1)을 넣습니다. 추후 매핑 로직이 필요합니다.
         stmt.run(
             basicInfo.clientCompany,
             basicInfo.clientName,
@@ -48,9 +56,11 @@ export async function action({ request }: Route.ActionArgs) {
             JSON.stringify(dealFlows),
             1,
             JSON.stringify(notes),
-            1,
-            1,
-            1,
+            basicInfo.partnerId ? Number(basicInfo.partnerId) : null,
+            basicInfo.partnerContactId
+                ? Number(basicInfo.partnerContactId)
+                : null,
+            basicInfo.amId ? Number(basicInfo.amId) : null,
         );
 
         // 성공적으로 저장되면 홈(견적 목록) 페이지로 이동합니다.
@@ -74,11 +84,14 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         clientName: "",
         clientEmail: "",
         clientPhone: "",
+        partnerId: "",
+        partnerContactId: "",
         partnerCompany: "",
         partnerName: "",
         partnerEmail: "",
         partnerPhone: "",
         amName: "",
+        amId: "",
         contractType: "",
     });
 
@@ -114,7 +127,44 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     // 기본 정보 입력 핸들러
     const handleBasicInfoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
-        setBasicInfo((prev) => ({ ...prev, [name]: value }));
+        setBasicInfo((prev) => {
+            const next = { ...prev, [name]: value };
+
+            if (name === "partnerCompany") {
+                const matchedPartner = loaderData.partners.find(
+                    (p: any) => p.name === value,
+                );
+                next.partnerId = matchedPartner ? matchedPartner.id : "";
+            } else if (name === "partnerName") {
+                const matchedContact = loaderData.partnerContacts.find(
+                    (c: any) =>
+                        c.name === value &&
+                        (!next.partnerId || c.partner_id == next.partnerId),
+                );
+                if (matchedContact) {
+                    next.partnerContactId = matchedContact.id;
+                    next.partnerEmail = matchedContact.email || "";
+                    next.partnerPhone = matchedContact.phone || "";
+                    if (!next.partnerId) {
+                        const p = loaderData.partners.find(
+                            (p: any) => p.id === matchedContact.partner_id,
+                        );
+                        if (p) {
+                            next.partnerCompany = p.name;
+                            next.partnerId = p.id;
+                        }
+                    }
+                } else {
+                    next.partnerContactId = "";
+                }
+            } else if (name === "amName") {
+                const matchedAm = loaderData.ams.find(
+                    (a: any) => a.name === value,
+                );
+                next.amId = matchedAm ? matchedAm.id : "";
+            }
+            return next;
+        });
     };
 
     // 제품 테이블 행(Row) 추가/삭제/변경 핸들러
@@ -463,21 +513,35 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 견적 등록
             </h1>
 
-            {/* 제품코드 자동완성(콤보박스)을 위한 datalist */}
-            <datalist id="product-list">
-                {loaderData.products.map((p: any) => (
-                    <option key={p.code} value={p.code}>
-                        {p.description}
-                    </option>
-                ))}
-            </datalist>
-
             {/* 서버 저장 실패 시 에러 메시지 표시 */}
             {actionData?.error && (
                 <div className="mb-6 p-4 bg-red-100 text-red-700 border border-red-400 rounded">
                     {actionData.error}
                 </div>
             )}
+
+            {/* 파트너사 및 담당자 자동완성(콤보박스)을 위한 datalist */}
+            <datalist id="partner-list">
+                {loaderData.partners.map((p: any) => (
+                    <option key={p.id} value={p.name} />
+                ))}
+            </datalist>
+            <datalist id="contact-list">
+                {loaderData.partnerContacts
+                    .filter(
+                        (c: any) =>
+                            !basicInfo.partnerId ||
+                            c.partner_id == basicInfo.partnerId,
+                    )
+                    .map((c: any) => (
+                        <option key={c.id} value={c.name} />
+                    ))}
+            </datalist>
+            <datalist id="am-list">
+                {loaderData.ams.map((a: any) => (
+                    <option key={a.id} value={a.name} />
+                ))}
+            </datalist>
 
             <form onSubmit={handleSubmit} className="space-y-6">
                 {/* 0. 기본 프로젝트 정보 (상단 추가) */}
@@ -566,6 +630,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             </label>
                             <input
                                 type="text"
+                                list="partner-list"
                                 name="partnerCompany"
                                 value={basicInfo.partnerCompany}
                                 onChange={handleBasicInfoChange}
@@ -578,6 +643,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             </label>
                             <input
                                 type="text"
+                                list="contact-list"
                                 name="partnerName"
                                 value={basicInfo.partnerName}
                                 onChange={handleBasicInfoChange}
@@ -621,6 +687,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             </label>
                             <input
                                 type="text"
+                                list="am-list"
                                 name="amName"
                                 value={basicInfo.amName}
                                 onChange={handleBasicInfoChange}
@@ -876,9 +943,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                             className="border-b last:border-b-0 border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50 divide-x divide-gray-200 dark:divide-gray-600"
                                         >
                                             <td className="p-2">
-                                                <input
-                                                    type="text"
-                                                    list="product-list"
+                                                <select
                                                     value={prod.제품코드}
                                                     onChange={(e) =>
                                                         handleProductChange(
@@ -888,8 +953,22 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                         )
                                                     }
                                                     className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm"
-                                                    placeholder="선택 또는 입력"
-                                                />
+                                                >
+                                                    <option value="">
+                                                        제품 선택
+                                                    </option>
+                                                    {loaderData.products.map(
+                                                        (p: any) => (
+                                                            <option
+                                                                key={p.code}
+                                                                value={p.code}
+                                                            >
+                                                                {p.code} -{" "}
+                                                                {p.description}
+                                                            </option>
+                                                        ),
+                                                    )}
+                                                </select>
                                             </td>
                                             <td className="p-2">
                                                 <input
