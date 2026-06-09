@@ -66,6 +66,7 @@ db.exec(`
     partner_contact_id INTEGER, -- 파트너 담당자 테이블 연결 id
     
     project_name TEXT, -- 사업명
+    quote_type INTEGER, -- 계산 기준 (0: PPC, 1: DC/마진)
     products TEXT, -- 제품 정보 (JSON 배열 문자열로 저장)
     created_at INTEGER, -- 기입날짜 (Unix timestamp 등)
     updated_at INTEGER, -- 마지막수정날짜 (Unix timestamp 등)
@@ -75,6 +76,8 @@ db.exec(`
     expected_quarter TEXT, -- 예상 분기
     stage INTEGER, -- 단계
     note TEXT, -- 비고
+    is_ordered INTEGER DEFAULT 0, -- 주문 여부
+    is_lost INTEGER DEFAULT 0, -- 실주 여부
     
     -- 외래키(Foreign Key) 지정으로 데이터 무결성을 보장합니다.
     FOREIGN KEY (partner_id) REFERENCES partners(id),
@@ -144,9 +147,9 @@ db.transaction(() => {
         const insert = db.prepare(`
             INSERT INTO quotes (
                 client_company, client_contact_name, client_contact_email, client_contact_phone,
-                partner_id, partner_contact_id, project_name, products,
+                partner_id, partner_contact_id, project_name, quote_type, products,
                 created_at, updated_at, am_id, contract_type, deal_flow, expected_quarter, stage, note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         // JSON 형식으로 들어갈 제품 목록 데이터 생성
@@ -200,6 +203,7 @@ db.transaction(() => {
             1,
             1,
             "차세대인프라",
+            1,
             sampleProducts, // JSON.stringify()로 변환된 문자열
             now, // created_at
             now, // updated_at

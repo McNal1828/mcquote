@@ -1,10 +1,4 @@
 import { useState } from "react";
-import {
-    useSubmit,
-    redirect,
-    useActionData,
-    useNavigation,
-} from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/quoting";
 
@@ -15,58 +9,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     return { products };
 }
 
-export async function action({ request }: Route.ActionArgs) {
-    // 클라이언트에서 JSON 형태로 전송한 데이터를 파싱합니다.
-    const data = await request.json();
-    const { basicInfo, dealFlows, products, notes, calcMode } = data;
-    const now = Date.now();
-    const quote_type = calcMode === "PPC" ? 0 : 1;
-
-    try {
-        const stmt = db.prepare(`
-            INSERT INTO quotes (
-                client_company, client_contact_name, client_contact_email, client_contact_phone,
-                project_name, quote_type, products, created_at, updated_at, 
-                contract_type, deal_flow, stage, note,
-                partner_id, partner_contact_id, am_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        // TODO: partner_id, partner_contact_id, am_id는 별도 테이블과 연결되는 외래키입니다.
-        // 현재는 이름만 텍스트로 받고 있으므로 임시값(1)을 넣습니다. 추후 매핑 로직이 필요합니다.
-        stmt.run(
-            basicInfo.clientCompany,
-            basicInfo.clientName,
-            basicInfo.clientEmail,
-            basicInfo.clientPhone,
-            basicInfo.projectName,
-            quote_type,
-            JSON.stringify(products),
-            now,
-            now,
-            basicInfo.contractType,
-            JSON.stringify(dealFlows),
-            1,
-            JSON.stringify(notes),
-            1,
-            1,
-            1,
-        );
-
-        // 성공적으로 저장되면 홈(견적 목록) 페이지로 이동합니다.
-        return redirect("/");
-    } catch (error) {
-        console.error("견적 등록 실패:", error);
-        return { error: "견적 등록 중 오류가 발생했습니다." };
-    }
-}
-
 export default function Quoting({ loaderData }: Route.ComponentProps) {
-    const submit = useSubmit();
-    const actionData = useActionData<{ error?: string }>();
-    const navigation = useNavigation();
-    const isSubmitting = navigation.state === "submitting";
-
     // 1. 기본 및 담당자/영업 정보 상태 관리
     const [basicInfo, setBasicInfo] = useState({
         projectName: "",
@@ -100,16 +43,11 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             공급가: 0,
             마진: 0,
             년차: 1,
-            원화PPC: 0,
-            마진율: "0.0",
         },
     ]);
 
     // 3. 비고 상태 관리
     const [notes, setNotes] = useState<string[]>([""]);
-
-    // 4. 계산 기준 모드 상태 관리 (기본값: DC원화 기준)
-    const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN">("DC");
 
     // 기본 정보 입력 핸들러
     const handleBasicInfoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -134,8 +72,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 공급가: 0,
                 마진: 0,
                 년차: 1,
-                원화PPC: 0,
-                마진율: "0.0",
             },
         ]);
     };
@@ -162,7 +98,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             }
 
             // 역산 로직 추가 (원화PPC 또는 마진율 변경 시 DC원화 재계산)
-            // TODO: 선택된 calcMode에 따라 입력 필드 제어 및 역산 로직도 추후 분기 처리가 필요할 수 있습니다.
             if (field === "원화PPC" || field === "마진율") {
                 const lpd = Number(updatedProduct.lpd) || 0;
                 const lpw = Number(updatedProduct.lpw) || 0;
@@ -173,30 +108,29 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 const baseTotalLpw = lpw * qty * period;
 
                 if (baseTotalLpw > 0) {
-                    let targetSupply: number | null = null;
-
                     if (field === "원화PPC") {
-                        targetSupply = (Number(value) || 0) * qty * period;
-                    } else if (field === "마진율") {
-                        const inputMarginPercent = Number(value) || 0;
-                        if (inputMarginPercent < 100) {
-                            const dollarPpc = lpd * (1 - dcDollar / 100);
-                            const wonNet =
-                                dollarPpc * qty * period * exchangeRate;
-                            targetSupply =
-                                Math.round(
-                                    wonNet /
-                                        (1 - inputMarginPercent / 100) /
-                                        1000,
-                                ) * 1000;
-                        }
-                    }
-
-                    if (targetSupply !== null) {
+                        const inputWonPpc = Number(value) || 0;
+                        const targetSupply = inputWonPpc * qty * period;
                         const rawDcWon =
                             (1 - targetSupply / baseTotalLpw) * 100;
                         updatedProduct.DC원화 =
                             Math.trunc(rawDcWon * 100) / 100;
+                    } else if (field === "마진율") {
+                        const inputMarginPercent = Number(value) || 0;
+                        const dollarPpc = lpd * (1 - dcDollar / 100);
+                        const dollarNet = dollarPpc * qty * period;
+                        const wonNet = dollarNet * exchangeRate;
+
+                        if (inputMarginPercent < 100) {
+                            const targetSupply =
+                                wonNet / (1 - inputMarginPercent / 100);
+                            const roundedSupply =
+                                Math.round(targetSupply / 1000) * 1000;
+                            const rawDcWon =
+                                (1 - roundedSupply / baseTotalLpw) * 100;
+                            updatedProduct.DC원화 =
+                                Math.trunc(rawDcWon * 100) / 100;
+                        }
                     }
                 }
             }
@@ -204,81 +138,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             newProducts[index] = updatedProduct;
             return newProducts;
         });
-    };
-
-    // 계산 기준 변경 핸들러 (모드 변경 시 이전 기준의 계산값을 바탕으로 새로운 기준의 입력 상태를 동기화)
-    const handleCalcModeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newMode = e.target.value as "PPC" | "DC" | "MARGIN";
-
-        setProducts((prev) =>
-            prev.map((prod) => {
-                // 1. 기존 calcMode를 바탕으로 현재 화면에 렌더링되고 있는 최종 '공급가'를 계산합니다.
-                const lpd = Number(prod.lpd) || 0;
-                const lpw = Number(prod.lpw) || 0;
-                const qty = Number(prod.수량) || 0;
-                const period = Number(prod.기간) || 0;
-                const dcDollar = Number(prod.DC달러) || 0;
-                const exchangeRate = Number(prod.환율) || 0;
-                const dcWon = Number(prod.DC원화) || 0;
-
-                const dollarPpc = lpd * (1 - dcDollar / 100);
-                const wonNet = dollarPpc * qty * period * exchangeRate;
-
-                let supplyPrice =
-                    Math.round(
-                        (lpw * qty * period * (1 - dcWon / 100)) / 1000,
-                    ) * 1000;
-
-                if (calcMode === "PPC" && (prod as any).원화PPC !== undefined) {
-                    supplyPrice = Number((prod as any).원화PPC) * qty * period;
-                } else if (
-                    calcMode === "MARGIN" &&
-                    (prod as any).마진율 !== undefined
-                ) {
-                    const inputMarginPercent = Number((prod as any).마진율);
-                    if (inputMarginPercent < 100) {
-                        supplyPrice =
-                            Math.round(
-                                wonNet / (1 - inputMarginPercent / 100) / 1000,
-                            ) * 1000;
-                    } else {
-                        supplyPrice = 0;
-                    }
-                }
-
-                // 2. 도출된 '공급가'를 바탕으로 나머지 파생 변수들을 역산합니다.
-                let currentWonPpc =
-                    qty * period > 0 ? supplyPrice / (qty * period) : 0;
-
-                // 원화 PPC 기준으로 변경될 경우, 도출된 원화PPC를 반올림하고 공급가를 재조정합니다.
-                if (newMode === "PPC") {
-                    currentWonPpc = Math.round(currentWonPpc);
-                    supplyPrice = currentWonPpc * qty * period;
-                }
-
-                const currentMargin = supplyPrice - wonNet;
-                const currentMarginPercent = supplyPrice
-                    ? ((currentMargin / supplyPrice) * 100).toFixed(1)
-                    : "0.0";
-
-                const baseTotalLpw = lpw * qty * period;
-                let currentDcWon = dcWon;
-                if (baseTotalLpw > 0) {
-                    const rawDcWon = (1 - supplyPrice / baseTotalLpw) * 100;
-                    currentDcWon = Math.trunc(rawDcWon * 100) / 100;
-                }
-
-                // 3. 역산된 최신 값들을 state에 덮어씌워, 모드 전환 시 이전 상태값(입력값)이 튀는 것을 방지합니다.
-                return {
-                    ...prod,
-                    원화PPC: currentWonPpc,
-                    마진율: currentMarginPercent,
-                    DC원화: currentDcWon,
-                };
-            }),
-        );
-
-        setCalcMode(newMode);
     };
 
     // 비고 항목 추가/삭제/변경 핸들러
@@ -318,70 +177,9 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     // 등록 버튼 클릭 시 호출
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-
-        // 제출하기 직전에 화면에 보여지는 실시간 계산값들을 products 배열에 완전히 덮어씌웁니다.
-        const finalProducts = products.map((prod) => {
-            const lpd = Number(prod.lpd) || 0;
-            const lpw = Number(prod.lpw) || 0;
-            const qty = Number(prod.수량) || 0;
-            const period = Number(prod.기간) || 0;
-            const dcDollar = Number(prod.DC달러) || 0;
-            const exchangeRate = Number(prod.환율) || 0;
-            const dcWon = Number(prod.DC원화) || 0;
-
-            const dollarPpc = lpd * (1 - dcDollar / 100);
-            const dollarCost = lpd * qty * period;
-            const dollarNet = dollarPpc * qty * period;
-            const wonNet = dollarNet * exchangeRate;
-
-            let supplyPrice =
-                Math.round((lpw * qty * period * (1 - dcWon / 100)) / 1000) *
-                1000;
-
-            if (calcMode === "PPC" && prod.원화PPC !== undefined) {
-                supplyPrice = Number(prod.원화PPC) * qty * period;
-            } else if (calcMode === "MARGIN" && prod.마진율 !== undefined) {
-                const inputMarginPercent = Number(prod.마진율);
-                supplyPrice =
-                    inputMarginPercent < 100
-                        ? Math.round(
-                              wonNet / (1 - inputMarginPercent / 100) / 1000,
-                          ) * 1000
-                        : 0;
-            }
-
-            const wonPpc = qty * period > 0 ? supplyPrice / (qty * period) : 0;
-            const margin = supplyPrice - wonNet;
-            const marginPercent = supplyPrice
-                ? ((margin / supplyPrice) * 100).toFixed(1)
-                : "0.0";
-
-            return {
-                ...prod,
-                달러원가: dollarCost,
-                달러net: dollarNet,
-                공급가: supplyPrice,
-                마진: margin,
-                원화PPC:
-                    calcMode === "PPC"
-                        ? prod.원화PPC !== undefined
-                            ? prod.원화PPC
-                            : Math.round(wonPpc)
-                        : Math.round(wonPpc),
-                마진율:
-                    calcMode === "MARGIN"
-                        ? prod.마진율 !== undefined
-                            ? prod.마진율
-                            : marginPercent
-                        : marginPercent,
-            };
-        });
-
-        // 현재 가지고 있는 모든 상태를 묶어서 서버 액션(JSON 형식)으로 제출합니다.
-        submit(
-            { basicInfo, dealFlows, products: finalProducts, notes, calcMode },
-            { method: "post", encType: "application/json" },
-        );
+        // TODO: 서버의 DB로 폼 데이터를 전송하는 로직을 나중에 구현합니다.
+        console.log({ basicInfo, dealFlows, products, notes });
+        alert("견적 데이터가 준비되었습니다. 콘솔 창을 확인하세요.");
     };
 
     // 엑셀 다운로드 핸들러
@@ -458,7 +256,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     };
 
     return (
-        <div className="p-8 w-full max-w-[1600px] mx-auto">
+        <div className="p-8 container mx-auto">
             <h1 className="text-3xl font-bold mb-6 dark:text-white">
                 견적 등록
             </h1>
@@ -471,13 +269,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     </option>
                 ))}
             </datalist>
-
-            {/* 서버 저장 실패 시 에러 메시지 표시 */}
-            {actionData?.error && (
-                <div className="mb-6 p-4 bg-red-100 text-red-700 border border-red-400 rounded">
-                    {actionData.error}
-                </div>
-            )}
 
             <form onSubmit={handleSubmit} className="space-y-6">
                 {/* 0. 기본 프로젝트 정보 (상단 추가) */}
@@ -697,63 +488,16 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                         <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
                             <span className="mr-2">📦</span> 제품 상세
                         </h3>
-                        <div className="flex items-center gap-4">
-                            {/* 계산 기준 선택 영역 */}
-                            <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 p-1.5 rounded border border-gray-200 dark:border-gray-600">
-                                <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 ml-2">
-                                    계산 기준:
-                                </span>
-                                <label className="flex items-center gap-1.5 cursor-pointer px-1">
-                                    <input
-                                        type="radio"
-                                        name="calcMode"
-                                        value="PPC"
-                                        checked={calcMode === "PPC"}
-                                        onChange={handleCalcModeChange}
-                                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                                        PPC
-                                    </span>
-                                </label>
-                                <label className="flex items-center gap-1.5 cursor-pointer px-1">
-                                    <input
-                                        type="radio"
-                                        name="calcMode"
-                                        value="DC"
-                                        checked={calcMode === "DC"}
-                                        onChange={handleCalcModeChange}
-                                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                                        DC원화
-                                    </span>
-                                </label>
-                                <label className="flex items-center gap-1.5 cursor-pointer px-1">
-                                    <input
-                                        type="radio"
-                                        name="calcMode"
-                                        value="MARGIN"
-                                        checked={calcMode === "MARGIN"}
-                                        onChange={handleCalcModeChange}
-                                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    <span className="text-sm text-gray-700 dark:text-gray-300">
-                                        마진
-                                    </span>
-                                </label>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={handleAddProduct}
-                                className="bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/50 px-3 py-1.5 rounded text-sm font-medium transition-colors"
-                            >
-                                + 제품 추가
-                            </button>
-                        </div>
+                        <button
+                            type="button"
+                            onClick={handleAddProduct}
+                            className="bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/50 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                        >
+                            + 제품 추가
+                        </button>
                     </div>
                     <div className="overflow-x-auto rounded border border-gray-200 dark:border-gray-600">
-                        <table className="w-full text-sm text-left table-fixed min-w-[1300px]">
+                        <table className="w-full text-sm text-left table-fixed min-w-[1480px]">
                             <thead className="bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-b dark:border-gray-600 whitespace-nowrap">
                                 <tr className="divide-x divide-gray-200 dark:divide-gray-600">
                                     <th className="p-2 font-semibold w-40">
@@ -764,6 +508,9 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                     </th>
                                     <th className="p-2 font-semibold text-center w-20">
                                         기간
+                                    </th>
+                                    <th className="p-2 font-semibold text-center w-28">
+                                        달러원가($)
                                     </th>
                                     <th className="p-2 font-semibold text-center w-20">
                                         DC달러(%)
@@ -817,52 +564,23 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                     const dollarNet = dollarPpc * qty * period;
                                     const wonNet = dollarNet * exchangeRate;
 
-                                    // 1. 기준 공급가 (DC원화 바탕)
-                                    let supplyPrice =
-                                        Math.round(
-                                            (lpw *
-                                                qty *
-                                                period *
-                                                (1 - dcWon / 100)) /
-                                                1000,
-                                        ) * 1000;
+                                    // 공급가: lpw * 수량 * 기간 * (1 - DC원화/100) -> 반올림 3자리(천 단위로 맞춤)
+                                    const rawSupplyPrice =
+                                        lpw * qty * period * (1 - dcWon / 100);
+                                    const supplyPrice =
+                                        Math.round(rawSupplyPrice / 1000) *
+                                        1000;
 
-                                    // 2. 선택된 계산 기준(calcMode)에 따른 공급가(supplyPrice) 덮어쓰기
-                                    if (
-                                        calcMode === "PPC" &&
-                                        (prod as any).원화PPC !== undefined
-                                    ) {
-                                        supplyPrice =
-                                            Number((prod as any).원화PPC) *
-                                            qty *
-                                            period;
-                                    } else if (
-                                        calcMode === "MARGIN" &&
-                                        (prod as any).마진율 !== undefined
-                                    ) {
-                                        const inputMarginPercent = Number(
-                                            (prod as any).마진율,
-                                        );
-                                        if (inputMarginPercent < 100) {
-                                            supplyPrice =
-                                                Math.round(
-                                                    wonNet /
-                                                        (1 -
-                                                            inputMarginPercent /
-                                                                100) /
-                                                        1000,
-                                                ) * 1000;
-                                        } else {
-                                            supplyPrice = 0;
-                                        }
-                                    }
-
-                                    // 3. 결정된 공급가를 바탕으로 나머지 파생 변수 일괄 계산 (중복 로직 제거)
+                                    // 원화PPC: 공급가 / (수량 * 기간)
                                     const wonPpc =
                                         qty * period > 0
                                             ? supplyPrice / (qty * period)
                                             : 0;
+
+                                    // 마진: 공급가 - 원화net
                                     const margin = supplyPrice - wonNet;
+
+                                    // 마진율: (마진 / 공급가) * 100
                                     const marginPercent = supplyPrice
                                         ? (
                                               (margin / supplyPrice) *
@@ -919,6 +637,16 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                     className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center"
                                                 />
                                             </td>
+                                            <td className="p-2 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
+                                                $
+                                                {dollarCost.toLocaleString(
+                                                    undefined,
+                                                    {
+                                                        minimumFractionDigits: 2,
+                                                        maximumFractionDigits: 2,
+                                                    },
+                                                )}
+                                            </td>
                                             <td className="p-2">
                                                 <input
                                                     type="number"
@@ -969,58 +697,35 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                     className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
                                                 />
                                             </td>
-                                            {calcMode === "PPC" ? (
-                                                <td className="p-2">
-                                                    <input
-                                                        type="number"
-                                                        value={
-                                                            (prod as any)
-                                                                .원화PPC !==
-                                                            undefined
-                                                                ? (prod as any)
-                                                                      .원화PPC
-                                                                : Math.round(
-                                                                      wonPpc,
-                                                                  )
-                                                        }
-                                                        onChange={(e) =>
-                                                            handleProductChange(
-                                                                idx,
-                                                                "원화PPC",
-                                                                e.target.value,
-                                                            )
-                                                        }
-                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-medium"
-                                                    />
-                                                </td>
-                                            ) : (
-                                                <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                                                    {Math.round(
-                                                        wonPpc,
-                                                    ).toLocaleString()}
-                                                </td>
-                                            )}
-                                            {calcMode === "DC" ? (
-                                                <td className="p-2">
-                                                    <input
-                                                        type="number"
-                                                        step="any"
-                                                        value={prod.DC원화}
-                                                        onChange={(e) =>
-                                                            handleProductChange(
-                                                                idx,
-                                                                "DC원화",
-                                                                e.target.value,
-                                                            )
-                                                        }
-                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
-                                                    />
-                                                </td>
-                                            ) : (
-                                                <td className="p-2 text-right text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                                                    {prod.DC원화}%
-                                                </td>
-                                            )}
+                                            <td className="p-2">
+                                                <input
+                                                    type="number"
+                                                    value={Math.round(wonPpc)}
+                                                    onChange={(e) =>
+                                                        handleProductChange(
+                                                            idx,
+                                                            "원화PPC",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-medium"
+                                                />
+                                            </td>
+                                            <td className="p-2">
+                                                <input
+                                                    type="number"
+                                                    step="any"
+                                                    value={prod.DC원화}
+                                                    onChange={(e) =>
+                                                        handleProductChange(
+                                                            idx,
+                                                            "DC원화",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                    className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
+                                                />
+                                            </td>
                                             <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
                                                 ₩{supplyPrice.toLocaleString()}
                                             </td>
@@ -1030,41 +735,26 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                     margin,
                                                 ).toLocaleString()}
                                             </td>
-                                            {calcMode === "MARGIN" ? (
-                                                <td className="p-2">
-                                                    <div className="flex items-center">
-                                                        <input
-                                                            type="number"
-                                                            step="any"
-                                                            value={
-                                                                (prod as any)
-                                                                    .마진율 !==
-                                                                undefined
-                                                                    ? (
-                                                                          prod as any
-                                                                      ).마진율
-                                                                    : marginPercent
-                                                            }
-                                                            onChange={(e) =>
-                                                                handleProductChange(
-                                                                    idx,
-                                                                    "마진율",
-                                                                    e.target
-                                                                        .value,
-                                                                )
-                                                            }
-                                                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-bold text-blue-600 dark:text-blue-400"
-                                                        />
-                                                        <span className="ml-1 text-blue-600 dark:text-blue-400 font-bold">
-                                                            %
-                                                        </span>
-                                                    </div>
-                                                </td>
-                                            ) : (
-                                                <td className="p-2 text-right font-bold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/50">
-                                                    {marginPercent}%
-                                                </td>
-                                            )}
+                                            <td className="p-2">
+                                                <div className="flex items-center">
+                                                    <input
+                                                        type="number"
+                                                        step="any"
+                                                        value={marginPercent}
+                                                        onChange={(e) =>
+                                                            handleProductChange(
+                                                                idx,
+                                                                "마진율",
+                                                                e.target.value,
+                                                            )
+                                                        }
+                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-bold text-blue-600 dark:text-blue-400"
+                                                    />
+                                                    <span className="ml-1 text-blue-600 dark:text-blue-400 font-bold">
+                                                        %
+                                                    </span>
+                                                </div>
+                                            </td>
                                             <td className="p-2">
                                                 <input
                                                     type="number"
@@ -1166,10 +856,9 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     </button>
                     <button
                         type="submit"
-                        disabled={isSubmitting}
-                        className={`px-6 py-2.5 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition-colors ${isSubmitting ? "opacity-70 cursor-not-allowed" : ""}`}
+                        className="px-6 py-2.5 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition-colors"
                     >
-                        {isSubmitting ? "등록 중..." : "견적 등록하기"}
+                        견적 등록하기
                     </button>
                 </div>
             </form>
