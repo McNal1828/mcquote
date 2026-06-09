@@ -33,6 +33,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     const [products, setProducts] = useState([
         {
             제품코드: "",
+            제품설명: "",
             lpd: 0,
             lpw: 0,
             수량: 1,
@@ -61,6 +62,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             ...prev,
             {
                 제품코드: "",
+                제품설명: "",
                 lpd: 0,
                 lpw: 0,
                 수량: 1,
@@ -92,6 +94,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 if (matched) {
                     updatedProduct.lpd = matched.lpd || 0;
                     updatedProduct.lpw = matched.lpw || 0;
+                    updatedProduct.제품설명 = matched.description || "";
                 }
             }
 
@@ -143,6 +146,37 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     };
 
     // 엑셀 다운로드 핸들러
+    const downloadFile = async (type: string, filename: string) => {
+        // 서버 API에 type 파라미터를 넘겨 어떤 파일을 만들지 구분할 수 있습니다.
+        const response = await fetch(`/api/download?type=${type}`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                products,
+                partnerCompany: basicInfo.partnerCompany,
+                partnerName: basicInfo.partnerName,
+                clientCompany: basicInfo.clientCompany,
+                projectName: basicInfo.projectName,
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`${filename} 다운로드 실패`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    };
+
     const handleDownloadExcel = async () => {
         if (products.length === 0) {
             alert("다운로드할 제품이 없습니다.");
@@ -150,27 +184,34 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         }
 
         try {
-            const response = await fetch("/api/download", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ products }),
-            });
+            // 오늘 날짜를 한국 시간 기준 YYMMDD 포맷으로 추출 (예: 260609)
+            const now = new Date();
+            const kstDateString = new Intl.DateTimeFormat("en-CA", {
+                timeZone: "Asia/Seoul",
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+            }).format(now);
+            const [yyyy, mm, dd] = kstDateString.split("-");
+            const dateStr = `${yyyy.slice(2)}${mm}${dd}`;
 
-            if (!response.ok) {
-                throw new Error("다운로드 실패");
-            }
+            // 파트너사, 담당자, 고객사, 프로젝트명, 날짜를 하이픈(-)으로 조합
+            // (빈 칸이거나 입력되지 않은 값은 filter(Boolean)으로 깔끔하게 제외합니다)
+            const prefix = [
+                basicInfo.partnerCompany?.trim(),
+                basicInfo.partnerName?.trim(),
+                basicInfo.clientCompany?.trim(),
+                basicInfo.projectName?.trim(),
+                dateStr,
+            ]
+                .filter(Boolean)
+                .join("-");
 
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "cost.xlsx";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
+            // 동시에 여러 파일 다운로드 실행
+            await Promise.all([
+                downloadFile("cost", `${prefix}-원가표.xlsx`),
+                downloadFile("quote", `${prefix}-견적서.xlsx`),
+            ]);
         } catch (error) {
             console.error(error);
             alert("엑셀 다운로드 중 오류가 발생했습니다.");
