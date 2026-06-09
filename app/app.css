@@ -1,15 +1,49 @@
 @import "tailwindcss";
 
+/* 다크 모드를 시스템 설정이 아닌 수동 클래스(.dark) 기반으로 동작하도록 변경 */
+@custom-variant dark (&:is(.dark *));
+
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+    --font-sans:
+        "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+        "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
 
 html,
 body {
-  @apply bg-white dark:bg-gray-950;
+    @apply bg-white dark:bg-gray-950;
+}
 
-  @media (prefers-color-scheme: dark) {
+/* 다크 모드 활성화 시 브라우저 기본 스크롤바 등도 어둡게 처리 */
+html.dark {
     color-scheme: dark;
-  }
+}
+
+/* 테이블 전역 스타일 개선 (라이트 모드 가독성 강화) */
+@layer base {
+    /* 모든 표의 테두리를 조금 더 진하게(gray-300) 설정하여 셀 구분선 명확화 */
+    table th,
+    table td {
+        @apply border border-gray-300 dark:border-gray-700;
+    }
+
+    /* 표 헤더의 배경색을 본문과 확실히 구분되도록 더 진하게 처리 */
+    table thead th {
+        @apply bg-gray-300 dark:bg-gray-900 text-gray-900 dark:text-gray-100 shadow-sm;
+    }
+
+    /* 홀수 행(기본 데이터) 배경색 명시 */
+    table tbody tr:nth-child(odd) {
+        @apply bg-white dark:bg-gray-800;
+    }
+
+    /* 짝수 행(데이터 항목)에 들어가는 줄무늬 색상을 명확하게 대비 */
+    table tbody tr:nth-child(even) {
+        @apply bg-gray-100 dark:bg-gray-700/50;
+    }
+
+    /* 표의 행에 마우스를 올렸을 때(Hover) 하이라이트 효과 강화 (단, .no-hover 클래스가 있는 행은 제외) */
+    table tbody tr:not(.no-hover):hover {
+        @apply !bg-blue-50 dark:!bg-gray-600/70 transition-colors;
+    }
 }

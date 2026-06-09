@@ -816,7 +816,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                     </tr>
                                     {/* 펼쳐진 영역 상세 내용 */}
                                     {expandedRows.has(quote.id) && (
-                                        <tr className="bg-blue-50/50 dark:bg-slate-700/50 border-b dark:border-gray-600 shadow-inner">
+                                        <tr className="no-hover !bg-blue-50 dark:!bg-indigo-950/50 border-y-2 border-blue-300 dark:border-indigo-700 shadow-inner">
                                             <td colSpan={7} className="p-6">
                                                 <div className="space-y-6">
                                                     {/* 0. 담당자 및 영업 요약 정보 */}
@@ -1359,7 +1359,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     key={
                                                                                         idx
                                                                                     }
-                                                                                    className="border-b last:border-b-0 border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50 divide-x divide-gray-200 dark:divide-gray-600"
+                                                                                    className="border-b last:border-b-0 border-gray-200 dark:border-gray-600 hover:!bg-blue-100 dark:hover:!bg-gray-600 divide-x divide-gray-200 dark:divide-gray-600"
                                                                                 >
                                                                                     <td className="p-2">
                                                                                         {isEditing ? (
