@@ -178,6 +178,16 @@ export async function action({ request }: Route.ActionArgs) {
             '&C&"Arial,Regular"&7For further information, please contact the person at the number above.\nThank you for the opportunity';
         worksheet.headerFooter.scaleWithDoc = true; // 바닥글 문서에 맞게 배율 조정(L)
 
+        // 전달받은 고객사, 사업명, 파트너사 정보를 C5, C6, C7 셀에 각각 기입합니다 (기존 서식 유지).
+        const c5 = worksheet.getCell("C5");
+        c5.value = clientCompany || "";
+
+        const c6 = worksheet.getCell("C6");
+        c6.value = projectName || "";
+
+        const c7 = worksheet.getCell("C7");
+        c7.value = partnerCompany || "";
+
         // C9 셀에 오늘 날짜를 정적 값으로 입력합니다. (단축키 Ctrl + ; 로 넣는 것과 동일)
         // 서버 타임존에 의한 시간 변동(오전 3시 등)을 막기 위해 UTC 기준 자정으로 Date 객체를 생성합니다.
         const now = new Date();
