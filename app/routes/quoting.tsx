@@ -568,7 +568,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             onChange={handleBasicInfoChange}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                             placeholder="예: 차세대 인프라 구축"
-                            required
                         />
                     </div>
                 </div>
