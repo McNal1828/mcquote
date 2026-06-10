@@ -13,7 +13,8 @@ export const links: Route.LinksFunction = () => [
 
 export function headers({ loaderHeaders }: Route.HeadersArgs) {
     return {
-        // "Cache-Control": "max-age=3600, s-maxage=3600",
+        // 개발 중에는 캐시를 비활성화하기 위해 주석 처리합니다.
+        // "Cache-Control": "max-age=300",
     };
 }
 
@@ -201,7 +202,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         let noteList = [];
         let dealFlowList = [];
 
-        // 1-1. JSON 형식인 제품 정보에서 공급가의 합계를 구합니다.
+        // JSON 형식인 제품 정보에서 공급가의 합계를 구합니다.
         try {
             productsList = JSON.parse(row.products || "[]");
             totalSupplyPrice = productsList.reduce(
@@ -468,6 +469,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 }
             }
 
+            // 역산 로직 추가 (원화PPC 또는 마진율 변경 시 DC원화 재계산)
+            // quoting.tsx와 동일한 로직입니다.
             if (field === "원화PPC" || field === "마진율") {
                 const lpd = Number(updatedProduct.lpd) || 0;
                 const lpw = Number(updatedProduct.lpw) || 0;

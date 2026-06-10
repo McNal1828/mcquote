@@ -23,7 +23,7 @@ export async function action({ request }: Route.ActionArgs) {
         return { error: "제품 코드가 필요합니다." };
     }
 
-    // intent 값에 따라 DB에 추가(INSERT) 또는 수정(UPDATE)을 수행합니다.
+    // intent 값에 따라 DB 작업을 분기합니다.
     if (intent === "add") {
         try {
             const stmt = db.prepare(`
@@ -50,6 +50,7 @@ export async function action({ request }: Route.ActionArgs) {
             };
         }
     } else {
+        // 'edit' 또는 정의되지 않은 intent의 경우 수정을 시도합니다.
         try {
             const stmt = db.prepare(`
                 UPDATE products

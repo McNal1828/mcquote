@@ -193,7 +193,7 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                             name="name"
                             required
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: (주)맥널"
+                            placeholder="예: 에티버스"
                         />
                     </div>
                     <div>

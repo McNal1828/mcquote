@@ -25,9 +25,9 @@ export async function action({ request }: Route.ActionArgs) {
 
         const worksheet = workbook.worksheets[0];
 
-        // 1. 제품 개수만큼 3행 밑에 빈 행을 삽입합니다. (기존 4행의 합산 수식은 자연스럽게 아래로 밀려납니다.)
+        // 1. 3행을 템플릿으로 사용하여, 4행부터 제품 개수만큼 행을 삽입합니다.
         if (products && products.length > 1) {
-            const emptyRows = Array(products.length - 1).fill([]);
+            const emptyRows = Array(products.length - 1).fill([]); // 템플릿 행(1개)을 제외한 나머지 개수만큼 빈 행 추가
             worksheet.spliceRows(4, 0, ...emptyRows);
         }
 

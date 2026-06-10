@@ -42,10 +42,19 @@ db.exec(`
   );
 `);
 
-// 4. 제품 테이블 생성 (제품코드를 고유 식별자로 사용)
+// 4. 총판 담당자 테이블 생성
+db.exec(`
+  CREATE TABLE IF NOT EXISTS dist_contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT, -- 이름
+    position TEXT -- 직책
+  );
+`);
+
+// 5. 제품 테이블 생성
 db.exec(`
   CREATE TABLE IF NOT EXISTS products (
-    code TEXT PRIMARY KEY, -- 제품코드 (고유값)
+    code TEXT PRIMARY KEY, -- 제품코드 (고유 식별자)
     description TEXT,
     lpd REAL, -- LP 달러(가격, 소수점이 있을 수 있으므로 REAL 사용)
     lpw REAL -- LP 원화
@@ -53,7 +62,7 @@ db.exec(`
 `);
 
 // 프로젝트(견적관리)를 위한 quotes 테이블 생성
-db.exec(`
+db.exec(` 
   CREATE TABLE IF NOT EXISTS quotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     
@@ -71,6 +80,7 @@ db.exec(`
     created_at INTEGER, -- 기입날짜 (Unix timestamp 등)
     updated_at INTEGER, -- 마지막수정날짜 (Unix timestamp 등)
     am_id INTEGER, -- AM 테이블 연결 id
+    dist_contact_id INTEGER, -- 총판 담당자 테이블 연결 id
     contract_type TEXT, -- 계약방식
     deal_flow TEXT, -- dealflow
     expected_quarter TEXT, -- 예상 분기
@@ -82,7 +92,8 @@ db.exec(`
     -- 외래키(Foreign Key) 지정으로 데이터 무결성을 보장합니다.
     FOREIGN KEY (partner_id) REFERENCES partners(id),
     FOREIGN KEY (partner_contact_id) REFERENCES partner_contacts(id),
-    FOREIGN KEY (am_id) REFERENCES ams(id)
+    FOREIGN KEY (am_id) REFERENCES ams(id),
+    FOREIGN KEY (dist_contact_id) REFERENCES dist_contacts(id)
   );
 `);
 
@@ -140,16 +151,26 @@ db.transaction(() => {
         insert.run("VCF-CLD-TEST", "test license", 1000, 3000000);
     }
 
+    const distContactCount = db
+        .prepare("SELECT COUNT(*) AS count FROM dist_contacts")
+        .get() as { count: number };
+    if (distContactCount.count === 0) {
+        const insert = db.prepare(
+            "INSERT INTO dist_contacts (name, position) VALUES (?, ?)",
+        );
+        insert.run("테스트총판", "부장");
+    }
+
     const quoteCount = db
         .prepare("SELECT COUNT(*) AS count FROM quotes")
         .get() as { count: number };
     if (quoteCount.count === 0) {
         const insert = db.prepare(`
             INSERT INTO quotes (
-                client_company, client_contact_name, client_contact_email, client_contact_phone,
-                partner_id, partner_contact_id, project_name, quote_type, products,
-                created_at, updated_at, am_id, contract_type, deal_flow, expected_quarter, stage, note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                client_company, client_contact_name, client_contact_email, client_contact_phone, partner_id, 
+                partner_contact_id, project_name, quote_type, products, created_at, updated_at, 
+                am_id, dist_contact_id, contract_type, deal_flow, expected_quarter, stage, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         // JSON 형식으로 들어갈 제품 목록 데이터 생성
@@ -208,6 +229,7 @@ db.transaction(() => {
             now, // created_at
             now, // updated_at
             1,
+            1, // dist_contact_id
             "일반경쟁",
             dealflow,
             "FY26Q3",
