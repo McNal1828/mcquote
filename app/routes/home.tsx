@@ -335,9 +335,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             const dollarNet = dollarPpc * qty * period;
             const wonNet = dollarNet * exchangeRate;
 
-            let supplyPrice =
-                Math.round((lpw * qty * period * (1 - dcWon / 100)) / 1000) *
-                1000;
+            const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
+            const discountedUnitLpw =
+                Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
+            let supplyPrice = discountedUnitLpw * qty;
 
             if (calcMode === "PPC" && prod.원화PPC !== undefined) {
                 supplyPrice = Number(prod.원화PPC) * qty * period;
@@ -592,10 +593,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 const dollarPpc = lpd * (1 - dcDollar / 100);
                 const wonNet = dollarPpc * qty * period * exchangeRate;
 
-                let supplyPrice =
-                    Math.round(
-                        (lpw * qty * period * (1 - dcWon / 100)) / 1000,
-                    ) * 1000;
+                const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
+                const discountedUnitLpw =
+                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
+                let supplyPrice = discountedUnitLpw * qty;
 
                 if (calcMode === "PPC" && (prod as any).원화PPC !== undefined) {
                     supplyPrice = Number((prod as any).원화PPC) * qty * period;
@@ -1406,17 +1407,25 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                 dollarNet *
                                                                                 exchangeRate;
 
-                                                                            let supplyPrice =
+                                                                            const baseUnitLpw =
                                                                                 Math.round(
                                                                                     (lpw *
-                                                                                        qty *
-                                                                                        period *
+                                                                                        period) /
+                                                                                        1000,
+                                                                                ) *
+                                                                                1000;
+                                                                            const discountedUnitLpw =
+                                                                                Math.round(
+                                                                                    (baseUnitLpw *
                                                                                         (1 -
                                                                                             dcWon /
                                                                                                 100)) /
                                                                                         1000,
                                                                                 ) *
                                                                                 1000;
+                                                                            let supplyPrice =
+                                                                                discountedUnitLpw *
+                                                                                qty;
 
                                                                             if (
                                                                                 currentMode ===

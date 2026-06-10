@@ -83,9 +83,6 @@ export async function action({ request }: Route.ActionArgs) {
             const dcWon = Number(prod.DC원화) || 0;
             row.getCell(12).value = dcWon / 100; // L (DC원화 %)
 
-            const lpw = Number(prod.lpw) || 0;
-            row.getCell(13).value = lpw; // M (lpw)
-
             // 계산이 필요한 셀들은 엑셀 수식(formula)으로 삽입합니다.
             row.getCell(6).value = {
                 formula: `E${rowIndex}*C${rowIndex}*D${rowIndex}`,
@@ -95,10 +92,16 @@ export async function action({ request }: Route.ActionArgs) {
                 formula: `I${rowIndex}*C${rowIndex}*D${rowIndex}`,
             }; // J: 달러net = 달러PPC * 수량 * 기간
             row.getCell(11).value = { formula: `J${rowIndex}*H${rowIndex}` }; // K: 원화net = 달러net * 환율
-            // 엑셀에서 ROUND(수식, -3)은 1,000 단위로 반올림합니다.
+
+            // M: E열(lpd) * D열(기간) * 3000 의 3자리 반올림
+            row.getCell(13).value = {
+                formula: `ROUND(E${rowIndex}*D${rowIndex}*3000, -3)`,
+            };
+
+            // N: (M열 * (1 - DC원화%)) 3자리 반올림 * C열(수량)
             row.getCell(14).value = {
-                formula: `ROUND(M${rowIndex}*C${rowIndex}*D${rowIndex}*(1-L${rowIndex}), -3)`,
-            }; // N: 공급가 = lpw * 수량 * 기간 * (1 - DC원화%)
+                formula: `ROUND(M${rowIndex}*(1-L${rowIndex}), -3)*C${rowIndex}`,
+            };
             row.getCell(15).value = { formula: `N${rowIndex}-K${rowIndex}` }; // O: 마진 = 공급가 - 원화net
             row.getCell(16).value = {
                 formula: `IF(N${rowIndex}=0, 0, O${rowIndex}/N${rowIndex})`,
@@ -139,13 +142,6 @@ export async function action({ request }: Route.ActionArgs) {
 
         const worksheet = workbook.worksheets[0];
 
-        // --- 기존 열 너비(Column Width) 백업 ---
-        // ExcelJS에서 행 삽입 시 간혹 열 너비가 초기화되는 버그가 있어 미리 저장합니다.
-        const originalColWidths: (number | undefined)[] = [];
-        for (let i = 1; i <= 17; i++) {
-            originalColWidths[i] = worksheet.getColumn(i).width;
-        }
-
         // --- 엑셀 보기 설정(눈금선 숨김) 강제 유지 ---
         if (worksheet.views && worksheet.views.length > 0) {
             worksheet.views.forEach((v) => {
@@ -168,9 +164,10 @@ export async function action({ request }: Route.ActionArgs) {
         };
         worksheet.pageSetup.horizontalCentered = true; // 가로 가운데 맞춤
 
+        // --- 엑셀 배율(Scale) 자동 축소 방지 ---
         worksheet.pageSetup.fitToPage = true; // 자동 맞춤 활성화
-        worksheet.pageSetup.fitToWidth = 1; // 너비 1페이지에 맞춤
-        worksheet.pageSetup.fitToHeight = 1; // 높이 1페이지에 맞춤
+        worksheet.pageSetup.fitToWidth = 1; // 가로(너비)는 1페이지에 딱 맞춤
+        worksheet.pageSetup.fitToHeight = undefined; // 세로(높이) 제한을 없애서 제품이 늘어나도 전체 배율이 쪼그라들지 않게 합니다.
 
         if (!worksheet.headerFooter) worksheet.headerFooter = {};
         // &C: 가운데 정렬, &"Arial,Regular"&7: Arial 폰트 7사이즈 적용, \n: 줄바꿈
@@ -272,7 +269,9 @@ export async function action({ request }: Route.ActionArgs) {
 
             const dcWon = Number(prod.DC원화) || 0;
             row.getCell(11).value = dcWon / 100; // K: DC원화 (%) - (I열 수식을 위해 먼저 세팅)
-            row.getCell(9).value = { formula: `G${rowIndex}*(1-K${rowIndex})` }; // I: G열에 K의 DC원화% 적용
+            row.getCell(9).value = {
+                formula: `ROUND(G${rowIndex}*(1-K${rowIndex}), -3)`,
+            }; // I: G열에 K의 DC원화% 적용 후 3자리 반올림
             row.getCell(10).value = { formula: `I${rowIndex}*E${rowIndex}` }; // J: I열 * E열
 
             row.commit();
@@ -286,6 +285,12 @@ export async function action({ request }: Route.ActionArgs) {
             const vatRowIndex = 38 + shiftCount; // 부가세 (기존 38행)
             const totalRowIndex = 39 + shiftCount; // 총합계 (기존 39행)
 
+            // 소계(SUM) 수식 명시적 업데이트 (ExcelJS 버그 방지 및 강제 재계산 유도)
+            const sumEndRow = 36 + shiftCount;
+            worksheet.getRow(subtotalRowIndex).getCell(9).value = {
+                formula: `SUM(J17:J${sumEndRow})`,
+            };
+
             // I열(9) 부가세 및 총계 수식 업데이트
             worksheet.getRow(vatRowIndex).getCell(9).value = {
                 formula: `I${subtotalRowIndex}*0.1`,
@@ -295,10 +300,25 @@ export async function action({ request }: Route.ActionArgs) {
             };
         }
 
-        // --- 기존 열 너비(Column Width) 복원 ---
-        for (let i = 1; i <= 15; i++) {
-            if (originalColWidths[i] !== undefined) {
-                worksheet.getColumn(i).width = originalColWidths[i];
+        // --- ExcelJS 테마 폰트 유실로 인한 열 너비 팽창(64px -> 73px) 강제 보정 ---
+        // 라이브러리 특성상 파일을 다시 쓸 때 문서 기본 폰트 기준이 달라져 가로 사이즈가 팽창하는 현상을 막기 위해
+        // 팽창 비율(64/73)만큼 너비 값을 역산하여 원본의 시각적 크기(64px)를 그대로 유지시킵니다.
+        const tempWorkbook = new ExcelJS.Workbook();
+        await tempWorkbook.xlsx.readFile(filePath);
+        const tempWorksheet = tempWorkbook.worksheets[0];
+
+        const shrinkRatio = 64 / 73; // 팽창 역보정 비율
+
+        if (tempWorksheet.properties?.defaultColWidth) {
+            if (!worksheet.properties) worksheet.properties = {};
+            worksheet.properties.defaultColWidth =
+                tempWorksheet.properties.defaultColWidth * shrinkRatio;
+        }
+
+        for (let i = 1; i <= 20; i++) {
+            const tempCol = tempWorksheet.getColumn(i);
+            if (tempCol && tempCol.width) {
+                worksheet.getColumn(i).width = tempCol.width * shrinkRatio;
             }
         }
 

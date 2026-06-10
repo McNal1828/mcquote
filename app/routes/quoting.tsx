@@ -289,10 +289,10 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 const dollarPpc = lpd * (1 - dcDollar / 100);
                 const wonNet = dollarPpc * qty * period * exchangeRate;
 
-                let supplyPrice =
-                    Math.round(
-                        (lpw * qty * period * (1 - dcWon / 100)) / 1000,
-                    ) * 1000;
+                const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
+                const discountedUnitLpw =
+                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
+                let supplyPrice = discountedUnitLpw * qty;
 
                 if (calcMode === "PPC" && (prod as any).원화PPC !== undefined) {
                     supplyPrice = Number((prod as any).원화PPC) * qty * period;
@@ -399,9 +399,10 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             const dollarNet = dollarPpc * qty * period;
             const wonNet = dollarNet * exchangeRate;
 
-            let supplyPrice =
-                Math.round((lpw * qty * period * (1 - dcWon / 100)) / 1000) *
-                1000;
+            const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
+            const discountedUnitLpw =
+                Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
+            let supplyPrice = discountedUnitLpw * qty;
 
             if (calcMode === "PPC" && prod.원화PPC !== undefined) {
                 supplyPrice = Number(prod.원화PPC) * qty * period;
@@ -948,14 +949,15 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                     const wonNet = dollarNet * exchangeRate;
 
                                     // 1. 기준 공급가 (DC원화 바탕)
-                                    let supplyPrice =
+                                    const baseUnitLpw =
+                                        Math.round((lpw * period) / 1000) *
+                                        1000;
+                                    const discountedUnitLpw =
                                         Math.round(
-                                            (lpw *
-                                                qty *
-                                                period *
-                                                (1 - dcWon / 100)) /
+                                            (baseUnitLpw * (1 - dcWon / 100)) /
                                                 1000,
                                         ) * 1000;
+                                    let supplyPrice = discountedUnitLpw * qty;
 
                                     // 2. 선택된 계산 기준(calcMode)에 따른 공급가(supplyPrice) 덮어쓰기
                                     if (
