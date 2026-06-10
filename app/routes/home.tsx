@@ -318,17 +318,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditIsLost(0);
     };
 
-    // 견적 수정 저장
-    const handleSaveEdit = (quoteId: number) => {
-        // 저장하기 직전에 화면에 보여지는 실시간 계산값들을 배열에 완전히 덮어씌웁니다.
-        const finalProducts = editProducts.map((prod) => {
+    // 다운로드 및 등록(수정) 제출 직전에 데이터를 재계산하여 정제하는 공통 함수
+    const getFinalProducts = (productsToProcess: any[]) => {
+        return productsToProcess.map((prod) => {
             const lpd = Number(prod.lpd) || 0;
             const lpw = Number(prod.lpw) || 0;
             const qty = Number(prod.수량) || 0;
             const period = Number(prod.기간) || 0;
             const dcDollar = Number(prod.DC달러) || 0;
             const exchangeRate = Number(prod.환율) || 0;
-            const dcWon = Number(prod.DC원화) || 0;
+            let dcWon = Number(prod.DC원화) || 0;
 
             const dollarPpc = lpd * (1 - dcDollar / 100);
             const dollarCost = lpd * qty * period;
@@ -336,20 +335,33 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             const wonNet = dollarNet * exchangeRate;
 
             const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
-            const discountedUnitLpw =
-                Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
-            let supplyPrice = discountedUnitLpw * qty;
+            let supplyPrice = 0;
 
             if (calcMode === "PPC" && prod.원화PPC !== undefined) {
                 supplyPrice = Number(prod.원화PPC) * qty * period;
             } else if (calcMode === "MARGIN" && prod.마진율 !== undefined) {
                 const inputMarginPercent = Number(prod.마진율);
-                supplyPrice =
-                    inputMarginPercent < 100
-                        ? Math.round(
-                              wonNet / (1 - inputMarginPercent / 100) / 1000,
-                          ) * 1000
-                        : 0;
+                let tempSupply = 0;
+                if (inputMarginPercent < 100) {
+                    tempSupply =
+                        Math.round(
+                            wonNet / (1 - inputMarginPercent / 100) / 1000,
+                        ) * 1000;
+                }
+                const baseTotalLpw = lpw * qty * period;
+                if (baseTotalLpw > 0) {
+                    const rawDcWon = (1 - tempSupply / baseTotalLpw) * 100;
+                    dcWon = Math.trunc(rawDcWon * 100) / 100;
+                }
+
+                // 마진% 기준일 경우, 역산된 DC원화를 바탕으로 공급가를 순방향으로 다시 도출
+                const discountedUnitLpw =
+                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
+                supplyPrice = discountedUnitLpw * qty;
+            } else {
+                const discountedUnitLpw =
+                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
+                supplyPrice = discountedUnitLpw * qty;
             }
 
             const wonPpc = qty * period > 0 ? supplyPrice / (qty * period) : 0;
@@ -360,24 +372,24 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
             return {
                 ...prod,
+                DC원화: dcWon, // 재계산된 DC원화 저장
                 달러원가: dollarCost,
                 달러net: dollarNet,
                 공급가: supplyPrice,
                 마진: margin,
                 원화PPC:
-                    calcMode === "PPC"
-                        ? prod.원화PPC !== undefined
-                            ? prod.원화PPC
-                            : Math.round(wonPpc)
+                    calcMode === "PPC" && prod.원화PPC !== undefined
+                        ? prod.원화PPC
                         : Math.round(wonPpc),
-                마진율:
-                    calcMode === "MARGIN"
-                        ? prod.마진율 !== undefined
-                            ? prod.마진율
-                            : marginPercent
-                        : marginPercent,
+                마진율: marginPercent, // 역산된 DC원화 기반으로 계산된 마진% 덮어씌움
             };
         });
+    };
+
+    // 견적 수정 저장
+    const handleSaveEdit = (quoteId: number) => {
+        // 저장하기 직전에 화면에 보여지는 실시간 계산값들을 배열에 완전히 덮어씌웁니다.
+        const finalProducts = getFinalProducts(editProducts);
 
         // 수정 저장 시에도 빈 칸으로 남겨진 비고(Notes)를 깔끔하게 걸러냅니다.
         const finalEditNotes = editNotes
@@ -690,7 +702,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         productsData: any[],
         currentProjectName: string,
     ) => {
-        if (!productsData || productsData.length === 0) {
+        const finalProductsData = getFinalProducts(productsData);
+        if (!finalProductsData || finalProductsData.length === 0) {
             alert("다운로드할 제품이 없습니다.");
             return;
         }
@@ -720,14 +733,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 downloadFile(
                     "cost",
                     `${prefix}-원가표.xlsx`,
-                    productsData,
+                    finalProductsData,
                     quote,
                     currentProjectName,
                 ),
                 downloadFile(
                     "quote",
                     `${prefix}-견적서.xlsx`,
-                    productsData,
+                    finalProductsData,
                     quote,
                     currentProjectName,
                 ),
