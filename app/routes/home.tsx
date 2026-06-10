@@ -18,12 +18,12 @@ export function headers({ loaderHeaders }: Route.HeadersArgs) {
     };
 }
 
-export function meta({}: Route.MetaArgs) {
-    return [
-        { title: "견적관리" },
-        { name: "description", content: "McNal의 견적관리 프로젝트" },
-    ];
-}
+// export function meta({}: Route.MetaArgs) {
+//     return [
+//         { title: "견적관리" },
+//         { name: "description", content: "McNal의 견적관리 프로젝트" },
+//     ];
+// }
 
 export async function action({ request }: Route.ActionArgs) {
     const data = await request.json();

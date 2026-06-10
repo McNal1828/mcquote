@@ -29,6 +29,18 @@ export const links: Route.LinksFunction = () => [
     },
 ];
 
+// 애플리케이션 전체의 기본 메타 태그를 설정합니다.
+export function meta({}: Route.MetaArgs) {
+    return [
+        { title: "McQuote" },
+        {
+            name: "description",
+            content: "에티버스 SDI사업본부 견적 관리 시스템입니다.",
+        },
+        { name: "author", content: "신동한" },
+    ];
+}
+
 const navItems = [
     { path: "/", label: "견적 목록" },
     { path: "/quoting", label: "견적 등록" },
