@@ -220,6 +220,104 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
     return (
         <div className="p-8 container mx-auto">
             <h1 className="text-3xl font-bold mb-6 dark:text-white">AM 목록</h1>
+
+            {/* 새 AM 추가 폼 영역 */}
+            <div className="mb-8 bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+                <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
+                    <span className="mr-2">➕</span> 새 AM 추가
+                </h2>
+                <addFetcher.Form
+                    method="post"
+                    ref={formRef}
+                    className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 items-end"
+                >
+                    {/* 폼 제출 시 등록 액션임을 서버에 알리는 숨김 필드 */}
+                    <input type="hidden" name="intent" value="add" />
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            AM명
+                        </label>
+                        <input
+                            type="text"
+                            name="name"
+                            required
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="예: 홍길동"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            직급
+                        </label>
+                        <input
+                            type="text"
+                            name="position"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="예: 부장"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            구분
+                        </label>
+                        <input
+                            type="text"
+                            name="job_type"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="예: 영업"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            이메일
+                        </label>
+                        <input
+                            type="email"
+                            name="email"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="example@mcnal.com"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            전화번호
+                        </label>
+                        <input
+                            type="text"
+                            name="phone"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="010-0000-0000"
+                        />
+                    </div>
+                    <div className="md:col-span-2 lg:col-span-2">
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            담당고객 (콤마로 구분)
+                        </label>
+                        <input
+                            type="text"
+                            name="assigned_clients"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="예: 삼성전자, LG전자, SK하이닉스"
+                        />
+                    </div>
+                    <div>
+                        <button
+                            type="submit"
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors"
+                        >
+                            {addFetcher.state === "submitting"
+                                ? "추가 중..."
+                                : "추가하기"}
+                        </button>
+                    </div>
+                </addFetcher.Form>
+                {addFetcher.data?.error && addFetcher.data.intent === "add" && (
+                    <p className="mt-3 text-red-500 text-sm font-medium">
+                        {addFetcher.data.error}
+                    </p>
+                )}
+            </div>
+
             <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                 <table className="w-full text-left border-collapse">
                     <thead>
@@ -364,103 +462,6 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                         )}
                     </tbody>
                 </table>
-            </div>
-
-            {/* 새 AM 추가 폼 영역 */}
-            <div className="mt-8 bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-                <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
-                    <span className="mr-2">➕</span> 새 AM 추가
-                </h2>
-                <addFetcher.Form
-                    method="post"
-                    ref={formRef}
-                    className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 items-end"
-                >
-                    {/* 폼 제출 시 등록 액션임을 서버에 알리는 숨김 필드 */}
-                    <input type="hidden" name="intent" value="add" />
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            AM명
-                        </label>
-                        <input
-                            type="text"
-                            name="name"
-                            required
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: 홍길동"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            직급
-                        </label>
-                        <input
-                            type="text"
-                            name="position"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: 부장"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            구분
-                        </label>
-                        <input
-                            type="text"
-                            name="job_type"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: 영업"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            이메일
-                        </label>
-                        <input
-                            type="email"
-                            name="email"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="example@mcnal.com"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            전화번호
-                        </label>
-                        <input
-                            type="text"
-                            name="phone"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="010-0000-0000"
-                        />
-                    </div>
-                    <div className="md:col-span-2 lg:col-span-2">
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            담당고객 (콤마로 구분)
-                        </label>
-                        <input
-                            type="text"
-                            name="assigned_clients"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: 삼성전자, LG전자, SK하이닉스"
-                        />
-                    </div>
-                    <div>
-                        <button
-                            type="submit"
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors"
-                        >
-                            {addFetcher.state === "submitting"
-                                ? "추가 중..."
-                                : "추가하기"}
-                        </button>
-                    </div>
-                </addFetcher.Form>
-                {addFetcher.data?.error && addFetcher.data.intent === "add" && (
-                    <p className="mt-3 text-red-500 text-sm font-medium">
-                        {addFetcher.data.error}
-                    </p>
-                )}
             </div>
         </div>
     );

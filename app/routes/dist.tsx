@@ -169,6 +169,59 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
             <h1 className="text-3xl font-bold mb-6 dark:text-white">
                 총판 담당자 목록
             </h1>
+
+            {/* 새 총판 담당자 추가 폼 영역 */}
+            <div className="mb-8 bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+                <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
+                    <span className="mr-2">➕</span> 새 총판 담당자 추가
+                </h2>
+                <addFetcher.Form
+                    method="post"
+                    ref={formRef}
+                    className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end"
+                >
+                    <input type="hidden" name="intent" value="add" />
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            담당자명
+                        </label>
+                        <input
+                            type="text"
+                            name="name"
+                            required
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="예: 김철수"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            직급
+                        </label>
+                        <input
+                            type="text"
+                            name="position"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="예: 과장"
+                        />
+                    </div>
+                    <div>
+                        <button
+                            type="submit"
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors"
+                        >
+                            {addFetcher.state === "submitting"
+                                ? "추가 중..."
+                                : "추가하기"}
+                        </button>
+                    </div>
+                </addFetcher.Form>
+                {addFetcher.data?.error && addFetcher.data.intent === "add" && (
+                    <p className="mt-3 text-red-500 text-sm font-medium">
+                        {addFetcher.data.error}
+                    </p>
+                )}
+            </div>
+
             <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                 <table className="w-full text-left border-collapse">
                     <thead>
@@ -287,58 +340,6 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                         )}
                     </tbody>
                 </table>
-            </div>
-
-            {/* 새 총판 담당자 추가 폼 영역 */}
-            <div className="mt-8 bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-                <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
-                    <span className="mr-2">➕</span> 새 총판 담당자 추가
-                </h2>
-                <addFetcher.Form
-                    method="post"
-                    ref={formRef}
-                    className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end"
-                >
-                    <input type="hidden" name="intent" value="add" />
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            담당자명
-                        </label>
-                        <input
-                            type="text"
-                            name="name"
-                            required
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: 김철수"
-                        />
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            직급
-                        </label>
-                        <input
-                            type="text"
-                            name="position"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                            placeholder="예: 과장"
-                        />
-                    </div>
-                    <div>
-                        <button
-                            type="submit"
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors"
-                        >
-                            {addFetcher.state === "submitting"
-                                ? "추가 중..."
-                                : "추가하기"}
-                        </button>
-                    </div>
-                </addFetcher.Form>
-                {addFetcher.data?.error && addFetcher.data.intent === "add" && (
-                    <p className="mt-3 text-red-500 text-sm font-medium">
-                        {addFetcher.data.error}
-                    </p>
-                )}
             </div>
         </div>
     );
