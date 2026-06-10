@@ -97,6 +97,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     addSearch("partner_company", "p.name");
     addSearch("partner_contact_name", "pc.name");
     addSearch("project_name", "q.project_name");
+    addSearch("dist_contact_name", "dc.name");
 
     // 사이드바 추가 필터 (상태 및 날짜)
     const isOrdered = url.searchParams.get("is_ordered") ?? "0";
@@ -137,6 +138,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
         LEFT JOIN ams a ON q.am_id = a.id
+        LEFT JOIN dist_contacts dc ON q.dist_contact_id = dc.id
         ${whereClause}
     `);
     const { total } = countStmt.get(...params) as { total: number };
@@ -147,6 +149,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         client_company: "q.client_company",
         partner_company: "p.name",
         partner_contact_name: "pc.name",
+        dist_contact_name: "dc.name",
         project_name: "q.project_name",
         created_at: "q.created_at",
         updated_at: "q.updated_at",
@@ -165,6 +168,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             pc.name as partner_contact_name,
             pc.email as partner_contact_email,
             pc.phone as partner_contact_phone,
+            dc.name as dist_contact_name,
             q.project_name,
             q.products,
             q.created_at,
@@ -182,6 +186,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
         LEFT JOIN ams a ON q.am_id = a.id
+        LEFT JOIN dist_contacts dc ON q.dist_contact_id = dc.id
         ${whereClause}
         ORDER BY ${dbSortKey} ${sortDir}
         LIMIT ? OFFSET ?
@@ -231,6 +236,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             partner_contact_name: row.partner_contact_name,
             partner_contact_email: row.partner_contact_email,
             partner_contact_phone: row.partner_contact_phone,
+            dist_contact_name: row.dist_contact_name,
             project_name: row.project_name,
             stage: row.stage,
             totalSupplyPrice, // 계산된 총 공급가
@@ -372,13 +378,18 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             };
         });
 
+        // 수정 저장 시에도 빈 칸으로 남겨진 비고(Notes)를 깔끔하게 걸러냅니다.
+        const finalEditNotes = editNotes
+            .map((n) => n.trim())
+            .filter((n) => n !== "");
+
         fetcher.submit(
             {
                 intent: "edit",
                 quoteId,
                 products: finalProducts,
                 calcMode,
-                notes: editNotes,
+                notes: finalEditNotes,
                 projectName: editProjectName,
                 isOrdered: editIsOrdered,
                 isLost: editIsLost,
@@ -630,6 +641,102 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setCalcMode(newMode);
     };
 
+    // 엑셀 출력 버튼 클릭 핸들러
+    const handleExportExcel = () => {
+        const queryString = searchParams.toString();
+        window.location.href = `/api/home/download?${queryString}`;
+    };
+
+    // 원가표/견적서 엑셀 다운로드 (개별 견적)
+    const downloadFile = async (
+        type: string,
+        filename: string,
+        productsData: any[],
+        quoteInfo: any,
+        projectName: string,
+    ) => {
+        const response = await fetch(`/api/download?type=${type}`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                products: productsData,
+                partnerCompany: quoteInfo.partner_company,
+                partnerName: quoteInfo.partner_contact_name,
+                clientCompany: quoteInfo.client_company,
+                projectName: projectName,
+            }),
+        });
+
+        if (!response.ok) {
+            throw new Error(`${filename} 다운로드 실패`);
+        }
+
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    };
+
+    const handleDownloadExcel = async (
+        quote: any,
+        productsData: any[],
+        currentProjectName: string,
+    ) => {
+        if (!productsData || productsData.length === 0) {
+            alert("다운로드할 제품이 없습니다.");
+            return;
+        }
+
+        try {
+            const now = new Date();
+            const kstDateString = new Intl.DateTimeFormat("en-CA", {
+                timeZone: "Asia/Seoul",
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+            }).format(now);
+            const [yyyy, mm, dd] = kstDateString.split("-");
+            const dateStr = `${yyyy.slice(2)}${mm}${dd}`;
+
+            const prefix = [
+                quote.partner_company?.trim(),
+                quote.partner_contact_name?.trim(),
+                quote.client_company?.trim(),
+                currentProjectName?.trim(),
+                dateStr,
+            ]
+                .filter(Boolean)
+                .join("-");
+
+            await Promise.all([
+                downloadFile(
+                    "cost",
+                    `${prefix}-원가표.xlsx`,
+                    productsData,
+                    quote,
+                    currentProjectName,
+                ),
+                downloadFile(
+                    "quote",
+                    `${prefix}-견적서.xlsx`,
+                    productsData,
+                    quote,
+                    currentProjectName,
+                ),
+            ]);
+        } catch (error) {
+            console.error(error);
+            alert("엑셀 다운로드 중 오류가 발생했습니다.");
+        }
+    };
+
     const renderTh = (
         label: string,
         columnKey: string,
@@ -756,6 +863,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                         ))}
                     </select>
                 </div>
+
+                {/* 출력하기 버튼 (가장 우측으로 밀기 위해 ml-auto 사용) */}
+                <div className="ml-auto">
+                    <button
+                        onClick={handleExportExcel}
+                        className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium transition-colors shadow-sm"
+                    >
+                        <span>📊</span> 출력하기
+                    </button>
+                </div>
             </div>
 
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 flex flex-col">
@@ -769,6 +886,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                     "파트너 담당자",
                                     "partner_contact_name",
                                 )}
+                                {renderTh("총판 담당자", "dist_contact_name")}
                                 {renderTh("사업명", "project_name")}
                                 {renderTh("총 공급가", "totalSupplyPrice", {
                                     sortable: false,
@@ -801,6 +919,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                             {quote.partner_contact_name}
                                         </td>
                                         <td className="p-4">
+                                            {quote.dist_contact_name}
+                                        </td>
+                                        <td className="p-4">
                                             {quote.project_name}
                                         </td>
                                         <td className="p-4 font-medium">
@@ -817,7 +938,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                     {/* 펼쳐진 영역 상세 내용 */}
                                     {expandedRows.has(quote.id) && (
                                         <tr className="no-hover !bg-blue-50 dark:!bg-indigo-950/50 border-y-2 border-blue-300 dark:border-indigo-700 shadow-inner">
-                                            <td colSpan={7} className="p-6">
+                                            <td colSpan={8} className="p-6">
                                                 <div className="space-y-6">
                                                     {/* 0. 담당자 및 영업 요약 정보 */}
                                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6 bg-white dark:bg-gray-800 p-5 rounded border border-gray-200 dark:border-gray-600">
@@ -879,6 +1000,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                 영업 정보
                                                             </h4>
                                                             <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+                                                                <p>
+                                                                    총판 담당자:{" "}
+                                                                    {quote.dist_contact_name ||
+                                                                        ""}
+                                                                </p>
                                                                 <p>
                                                                     AM 이름:{" "}
                                                                     {quote.am_name ||
@@ -1719,6 +1845,30 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                 </tbody>
                                                             </table>
                                                         </div>
+
+                                                        {/* 원가표/견적서 다운로드 버튼 (오른쪽 아래) */}
+                                                        <div className="flex justify-end mt-4">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    handleDownloadExcel(
+                                                                        quote,
+                                                                        editingQuoteId ===
+                                                                            quote.id
+                                                                            ? editProducts
+                                                                            : quote.productsList,
+                                                                        editingQuoteId ===
+                                                                            quote.id
+                                                                            ? editProjectName
+                                                                            : quote.project_name,
+                                                                    )
+                                                                }
+                                                                className="px-5 py-2 rounded border border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30 font-medium transition-colors text-sm shadow-sm"
+                                                            >
+                                                                원가표/견적서
+                                                                다운로드
+                                                            </button>
+                                                        </div>
                                                     </div>
 
                                                     {/* 2. 비고 리스트 */}
@@ -1810,27 +1960,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                 </div>
                                                             ) : (
                                                                 <ul className="list-disc pl-5 text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
-                                                                    {[
-                                                                        ...quote.noteList,
-                                                                    ]
-                                                                        .reverse()
-                                                                        .map(
-                                                                            (
-                                                                                noteText: string,
-                                                                                idx: number,
-                                                                            ) => (
-                                                                                <li
-                                                                                    key={
-                                                                                        idx
-                                                                                    }
-                                                                                    className="whitespace-pre-wrap leading-relaxed"
-                                                                                >
-                                                                                    {
-                                                                                        noteText
-                                                                                    }
-                                                                                </li>
-                                                                            ),
-                                                                        )}
+                                                                    {quote.noteList.map(
+                                                                        (
+                                                                            noteText: string,
+                                                                            idx: number,
+                                                                        ) => (
+                                                                            <li
+                                                                                key={
+                                                                                    idx
+                                                                                }
+                                                                                className="whitespace-pre-wrap leading-relaxed"
+                                                                            >
+                                                                                {
+                                                                                    noteText
+                                                                                }
+                                                                            </li>
+                                                                        ),
+                                                                    )}
                                                                 </ul>
                                                             )}
                                                         </div>

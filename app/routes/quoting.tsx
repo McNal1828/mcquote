@@ -22,7 +22,12 @@ export async function loader({ request }: Route.LoaderArgs) {
         )
         .all();
     const ams = db.prepare("SELECT id, name FROM ams ORDER BY name ASC").all();
-    return { products, partners, partnerContacts, ams };
+    const distContacts = db
+        .prepare(
+            "SELECT id, name, position FROM dist_contacts ORDER BY name ASC",
+        )
+        .all();
+    return { products, partners, partnerContacts, ams, distContacts };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -38,8 +43,8 @@ export async function action({ request }: Route.ActionArgs) {
                 client_company, client_contact_name, client_contact_email, client_contact_phone,
                 project_name, quote_type, products, created_at, updated_at, 
                 contract_type, deal_flow, stage, note,
-                partner_id, partner_contact_id, am_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                partner_id, partner_contact_id, am_id, dist_contact_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         stmt.run(
@@ -61,6 +66,7 @@ export async function action({ request }: Route.ActionArgs) {
                 ? Number(basicInfo.partnerContactId)
                 : null,
             basicInfo.amId ? Number(basicInfo.amId) : null,
+            basicInfo.distContactId ? Number(basicInfo.distContactId) : null,
         );
 
         // 성공적으로 저장되면 홈(견적 목록) 페이지로 이동합니다.
@@ -92,6 +98,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         partnerPhone: "",
         amName: "",
         amId: "",
+        distContactName: "",
+        distContactId: "",
         contractType: "",
     });
 
@@ -162,6 +170,13 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     (a: any) => a.name === value,
                 );
                 next.amId = matchedAm ? matchedAm.id : "";
+            } else if (name === "distContactName") {
+                const matchedDistContact = loaderData.distContacts.find(
+                    (d: any) => d.name === value,
+                );
+                next.distContactId = matchedDistContact
+                    ? matchedDistContact.id
+                    : "";
             }
             return next;
         });
@@ -366,7 +381,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     };
 
     // 등록 버튼 클릭 시 호출
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
         // 제출하기 직전에 화면에 보여지는 실시간 계산값들을 products 배열에 완전히 덮어씌웁니다.
@@ -427,15 +442,34 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             };
         });
 
+        // 제출 전, 빈 칸으로 남겨진 Deal Flow와 비고(Notes)를 깔끔하게 걸러냅니다.
+        const finalNotes = notes.map((n) => n.trim()).filter((n) => n !== "");
+        const finalDealFlows = dealFlows
+            .map((f) => f.trim())
+            .filter((f) => f !== "");
+
+        // 다운로드를 먼저 자동 실행합니다.
+        await handleDownloadExcel(finalProducts);
+
         // 현재 가지고 있는 모든 상태를 묶어서 서버 액션(JSON 형식)으로 제출합니다.
         submit(
-            { basicInfo, dealFlows, products: finalProducts, notes, calcMode },
+            {
+                basicInfo,
+                dealFlows: finalDealFlows,
+                products: finalProducts,
+                notes: finalNotes,
+                calcMode,
+            },
             { method: "post", encType: "application/json" },
         );
     };
 
     // 엑셀 다운로드 핸들러
-    const downloadFile = async (type: string, filename: string) => {
+    const downloadFile = async (
+        type: string,
+        filename: string,
+        productsData: any[],
+    ) => {
         // 서버 API에 type 파라미터를 넘겨 어떤 파일을 만들지 구분할 수 있습니다.
         const response = await fetch(`/api/download?type=${type}`, {
             method: "POST",
@@ -443,7 +477,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                products,
+                products: productsData,
                 partnerCompany: basicInfo.partnerCompany,
                 partnerName: basicInfo.partnerName,
                 clientCompany: basicInfo.clientCompany,
@@ -466,8 +500,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         window.URL.revokeObjectURL(url);
     };
 
-    const handleDownloadExcel = async () => {
-        if (products.length === 0) {
+    const handleDownloadExcel = async (productsData = products) => {
+        if (productsData.length === 0) {
             alert("다운로드할 제품이 없습니다.");
             return;
         }
@@ -498,8 +532,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
 
             // 동시에 여러 파일 다운로드 실행
             await Promise.all([
-                downloadFile("cost", `${prefix}-원가표.xlsx`),
-                downloadFile("quote", `${prefix}-견적서.xlsx`),
+                downloadFile("cost", `${prefix}-원가표.xlsx`, productsData),
+                downloadFile("quote", `${prefix}-견적서.xlsx`, productsData),
             ]);
         } catch (error) {
             console.error(error);
@@ -542,8 +576,24 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     <option key={a.id} value={a.name} />
                 ))}
             </datalist>
+            <datalist id="dist-contact-list">
+                {loaderData.distContacts.map((d: any) => (
+                    <option key={d.id} value={d.name} />
+                ))}
+            </datalist>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
+            <form
+                onSubmit={handleSubmit}
+                onKeyDown={(e) => {
+                    if (
+                        e.key === "Enter" &&
+                        (e.target as HTMLElement).tagName !== "TEXTAREA"
+                    ) {
+                        e.preventDefault();
+                    }
+                }}
+                className="space-y-6"
+            >
                 {/* 0. 기본 프로젝트 정보 (상단 추가) */}
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 grid grid-cols-1 gap-4">
                     <div>
@@ -681,6 +731,19 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                         <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center border-b dark:border-gray-700 pb-2">
                             <span className="mr-2">👤</span> 영업 정보
                         </h4>
+                        <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                                총판 담당자
+                            </label>
+                            <input
+                                type="text"
+                                list="dist-contact-list"
+                                name="distContactName"
+                                value={basicInfo.distContactName}
+                                onChange={handleBasicInfoChange}
+                                className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm"
+                            />
+                        </div>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
                                 AM 이름
@@ -1238,7 +1301,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     </button>
                     <button
                         type="button"
-                        onClick={handleDownloadExcel}
+                        onClick={() => handleDownloadExcel(products)}
                         className="px-6 py-2.5 rounded border border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30 font-medium transition-colors"
                     >
                         원가표/견적서 다운로드
