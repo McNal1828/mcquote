@@ -319,7 +319,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     };
 
     // 다운로드 및 등록(수정) 제출 직전에 데이터를 재계산하여 정제하는 공통 함수
-    const getFinalProducts = (productsToProcess: any[]) => {
+    const getFinalProducts = (
+        productsToProcess: any[],
+        currentMode: string = calcMode,
+    ) => {
         return productsToProcess.map((prod) => {
             const lpd = Number(prod.lpd) || 0;
             const lpw = Number(prod.lpw) || 0;
@@ -337,9 +340,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
             let supplyPrice = 0;
 
-            if (calcMode === "PPC" && prod.원화PPC !== undefined) {
+            if (currentMode === "PPC" && prod.원화PPC !== undefined) {
                 supplyPrice = Number(prod.원화PPC) * qty * period;
-            } else if (calcMode === "MARGIN" && prod.마진율 !== undefined) {
+            } else if (currentMode === "MARGIN" && prod.마진율 !== undefined) {
                 const inputMarginPercent = Number(prod.마진율);
                 let tempSupply = 0;
                 if (inputMarginPercent < 100) {
@@ -373,15 +376,19 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             return {
                 ...prod,
                 DC원화: dcWon, // 재계산된 DC원화 저장
+                달러PPC: dollarPpc,
                 달러원가: dollarCost,
                 달러net: dollarNet,
                 공급가: supplyPrice,
                 마진: margin,
                 원화PPC:
-                    calcMode === "PPC" && prod.원화PPC !== undefined
+                    currentMode === "PPC" && prod.원화PPC !== undefined
                         ? prod.원화PPC
                         : Math.round(wonPpc),
-                마진율: marginPercent, // 역산된 DC원화 기반으로 계산된 마진% 덮어씌움
+                마진율:
+                    currentMode === "MARGIN" && prod.마진율 !== undefined
+                        ? prod.마진율
+                        : marginPercent,
             };
         });
     };
@@ -591,66 +598,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     // quoting.tsx와 동일한 계산 기준(calcMode) 변경 핸들러
     const handleCalcModeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const newMode = e.target.value as "PPC" | "DC" | "MARGIN";
-
-        setEditProducts((prev) =>
-            prev.map((prod) => {
-                const lpd = Number(prod.lpd) || 0;
-                const lpw = Number(prod.lpw) || 0;
-                const qty = Number(prod.수량) || 0;
-                const period = Number(prod.기간) || 0;
-                const dcDollar = Number(prod.DC달러) || 0;
-                const exchangeRate = Number(prod.환율) || 0;
-                const dcWon = Number(prod.DC원화) || 0;
-
-                const dollarPpc = lpd * (1 - dcDollar / 100);
-                const wonNet = dollarPpc * qty * period * exchangeRate;
-
-                const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
-                const discountedUnitLpw =
-                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
-                let supplyPrice = discountedUnitLpw * qty;
-
-                if (calcMode === "PPC" && (prod as any).원화PPC !== undefined) {
-                    supplyPrice = Number((prod as any).원화PPC) * qty * period;
-                } else if (
-                    calcMode === "MARGIN" &&
-                    (prod as any).마진율 !== undefined
-                ) {
-                    const inputMarginPercent = Number((prod as any).마진율);
-                    supplyPrice =
-                        inputMarginPercent < 100
-                            ? Math.round(
-                                  wonNet /
-                                      (1 - inputMarginPercent / 100) /
-                                      1000,
-                              ) * 1000
-                            : 0;
-                }
-
-                let currentWonPpc =
-                    qty * period > 0 ? supplyPrice / (qty * period) : 0;
-                if (newMode === "PPC") {
-                    currentWonPpc = Math.round(currentWonPpc);
-                    supplyPrice = currentWonPpc * qty * period;
-                }
-
-                const currentMargin = supplyPrice - wonNet;
-                const currentMarginPercent = supplyPrice
-                    ? ((currentMargin / supplyPrice) * 100).toFixed(1)
-                    : "0.0";
-                const rawDcWon =
-                    lpw * qty * period > 0
-                        ? (1 - supplyPrice / (lpw * qty * period)) * 100
-                        : dcWon;
-
-                return {
-                    ...prod,
-                    원화PPC: currentWonPpc,
-                    마진율: currentMarginPercent,
-                    DC원화: Math.trunc(rawDcWon * 100) / 100,
-                };
-            }),
-        );
+        setEditProducts((prev) => getFinalProducts(prev, calcMode));
         setCalcMode(newMode);
     };
 
@@ -1346,19 +1294,26 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                     </tr>
                                                                 </thead>
                                                                 <tbody>
-                                                                    {(editingQuoteId ===
-                                                                    quote.id
-                                                                        ? editProducts
-                                                                        : quote.productsList
+                                                                    {getFinalProducts(
+                                                                        editingQuoteId ===
+                                                                            quote.id
+                                                                            ? editProducts
+                                                                            : quote.productsList,
+                                                                        editingQuoteId ===
+                                                                            quote.id
+                                                                            ? calcMode
+                                                                            : quote.quote_type ===
+                                                                                0
+                                                                              ? "PPC"
+                                                                              : "DC",
                                                                     ).map(
                                                                         (
-                                                                            prod: any,
+                                                                            calcProd: any,
                                                                             idx: number,
                                                                         ) => {
                                                                             const isEditing =
                                                                                 editingQuoteId ===
                                                                                 quote.id;
-                                                                            // 수정 중이 아닐 때는 저장된 quote_type(0: PPC, 1: DC) 기준으로 렌더링
                                                                             const currentMode =
                                                                                 isEditing
                                                                                     ? calcMode
@@ -1366,141 +1321,15 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         0
                                                                                       ? "PPC"
                                                                                       : "DC";
-
-                                                                            const lpd =
-                                                                                Number(
-                                                                                    prod.lpd,
-                                                                                ) ||
-                                                                                0;
-                                                                            const lpw =
-                                                                                Number(
-                                                                                    prod.lpw,
-                                                                                ) ||
-                                                                                0;
-                                                                            const qty =
-                                                                                Number(
-                                                                                    prod.수량,
-                                                                                ) ||
-                                                                                0;
-                                                                            const period =
-                                                                                Number(
-                                                                                    prod.기간,
-                                                                                ) ||
-                                                                                0;
-                                                                            const dcDollar =
-                                                                                Number(
-                                                                                    prod.DC달러,
-                                                                                ) ||
-                                                                                0;
-                                                                            const exchangeRate =
-                                                                                Number(
-                                                                                    prod.환율,
-                                                                                ) ||
-                                                                                0;
-                                                                            const dcWon =
-                                                                                Number(
-                                                                                    prod.DC원화,
-                                                                                ) ||
-                                                                                0;
-
-                                                                            const dollarPpc =
-                                                                                lpd *
-                                                                                (1 -
-                                                                                    dcDollar /
-                                                                                        100);
-                                                                            const dollarCost =
-                                                                                lpd *
-                                                                                qty *
-                                                                                period;
-                                                                            const dollarNet =
-                                                                                dollarPpc *
-                                                                                qty *
-                                                                                period;
-                                                                            const wonNet =
-                                                                                dollarNet *
-                                                                                exchangeRate;
-
-                                                                            const baseUnitLpw =
-                                                                                Math.round(
-                                                                                    (lpw *
-                                                                                        period) /
-                                                                                        1000,
-                                                                                ) *
-                                                                                1000;
-                                                                            const discountedUnitLpw =
-                                                                                Math.round(
-                                                                                    (baseUnitLpw *
-                                                                                        (1 -
-                                                                                            dcWon /
-                                                                                                100)) /
-                                                                                        1000,
-                                                                                ) *
-                                                                                1000;
-                                                                            let supplyPrice =
-                                                                                discountedUnitLpw *
-                                                                                qty;
-
-                                                                            if (
-                                                                                currentMode ===
-                                                                                    "PPC" &&
-                                                                                prod.원화PPC !==
-                                                                                    undefined
-                                                                            ) {
-                                                                                supplyPrice =
-                                                                                    Number(
-                                                                                        prod.원화PPC,
-                                                                                    ) *
-                                                                                    qty *
-                                                                                    period;
-                                                                            } else if (
-                                                                                currentMode ===
-                                                                                    "MARGIN" &&
-                                                                                prod.마진율 !==
-                                                                                    undefined
-                                                                            ) {
-                                                                                const inputMarginPercent =
-                                                                                    Number(
-                                                                                        prod.마진율,
-                                                                                    );
-                                                                                if (
-                                                                                    inputMarginPercent <
-                                                                                    100
-                                                                                ) {
-                                                                                    supplyPrice =
-                                                                                        Math.round(
-                                                                                            wonNet /
-                                                                                                (1 -
-                                                                                                    inputMarginPercent /
-                                                                                                        100) /
-                                                                                                1000,
-                                                                                        ) *
-                                                                                        1000;
-                                                                                } else {
-                                                                                    supplyPrice = 0;
-                                                                                }
-                                                                            }
-
-                                                                            const wonPpc =
-                                                                                qty *
-                                                                                    period >
-                                                                                0
-                                                                                    ? supplyPrice /
-                                                                                      (qty *
-                                                                                          period)
-                                                                                    : 0;
-                                                                            const margin =
-                                                                                supplyPrice -
-                                                                                wonNet;
-                                                                            const marginPercent =
-                                                                                supplyPrice
-                                                                                    ? (
-                                                                                          (margin /
-                                                                                              supplyPrice) *
-                                                                                          100
-                                                                                      ).toFixed(
-                                                                                          1,
-                                                                                      )
-                                                                                    : "0.0";
+                                                                            const rawProd =
+                                                                                isEditing
+                                                                                    ? editProducts[
+                                                                                          idx
+                                                                                      ]
+                                                                                    : quote
+                                                                                          .productsList[
+                                                                                          idx
+                                                                                      ];
 
                                                                             return (
                                                                                 <tr
@@ -1513,7 +1342,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         {isEditing ? (
                                                                                             <select
                                                                                                 value={
-                                                                                                    prod.제품코드
+                                                                                                    rawProd.제품코드
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1558,7 +1387,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         ) : (
                                                                                             <span className="px-2">
                                                                                                 {
-                                                                                                    prod.제품코드
+                                                                                                    calcProd.제품코드
                                                                                                 }
                                                                                             </span>
                                                                                         )}
@@ -1568,7 +1397,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             <input
                                                                                                 type="number"
                                                                                                 value={
-                                                                                                    prod.수량
+                                                                                                    rawProd.수량
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1586,7 +1415,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         ) : (
                                                                                             <div className="text-right px-2">
                                                                                                 {
-                                                                                                    prod.수량
+                                                                                                    calcProd.수량
                                                                                                 }
                                                                                             </div>
                                                                                         )}
@@ -1596,7 +1425,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             <input
                                                                                                 type="number"
                                                                                                 value={
-                                                                                                    prod.기간
+                                                                                                    rawProd.기간
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1614,7 +1443,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         ) : (
                                                                                             <div className="text-center px-2">
                                                                                                 {
-                                                                                                    prod.기간
+                                                                                                    calcProd.기간
                                                                                                 }
                                                                                             </div>
                                                                                         )}
@@ -1625,7 +1454,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                 type="number"
                                                                                                 step="any"
                                                                                                 value={
-                                                                                                    prod.DC달러
+                                                                                                    rawProd.DC달러
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1643,7 +1472,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         ) : (
                                                                                             <div className="text-right px-2">
                                                                                                 {
-                                                                                                    prod.DC달러
+                                                                                                    calcProd.DC달러
                                                                                                 }
 
                                                                                                 %
@@ -1652,7 +1481,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     </td>
                                                                                     <td className="p-2 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
                                                                                         $
-                                                                                        {dollarPpc.toLocaleString(
+                                                                                        {Number(
+                                                                                            calcProd.달러PPC,
+                                                                                        ).toLocaleString(
                                                                                             undefined,
                                                                                             {
                                                                                                 minimumFractionDigits: 2,
@@ -1662,7 +1493,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     </td>
                                                                                     <td className="p-2 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
                                                                                         $
-                                                                                        {dollarNet.toLocaleString(
+                                                                                        {Number(
+                                                                                            calcProd.달러net,
+                                                                                        ).toLocaleString(
                                                                                             undefined,
                                                                                             {
                                                                                                 minimumFractionDigits: 2,
@@ -1676,7 +1509,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                 type="number"
                                                                                                 step="any"
                                                                                                 value={
-                                                                                                    prod.환율
+                                                                                                    rawProd.환율
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1694,7 +1527,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         ) : (
                                                                                             <div className="text-right px-2">
                                                                                                 ₩
-                                                                                                {prod.환율?.toLocaleString()}
+                                                                                                {Number(
+                                                                                                    calcProd.환율,
+                                                                                                ).toLocaleString()}
                                                                                             </div>
                                                                                         )}
                                                                                     </td>
@@ -1705,12 +1540,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             <input
                                                                                                 type="number"
                                                                                                 value={
-                                                                                                    prod.원화PPC !==
+                                                                                                    rawProd.원화PPC !==
                                                                                                     undefined
-                                                                                                        ? prod.원화PPC
-                                                                                                        : Math.round(
-                                                                                                              wonPpc,
-                                                                                                          )
+                                                                                                        ? rawProd.원화PPC
+                                                                                                        : calcProd.원화PPC
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1728,8 +1561,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         </td>
                                                                                     ) : (
                                                                                         <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                                                                                            {Math.round(
-                                                                                                wonPpc,
+                                                                                            {Number(
+                                                                                                calcProd.원화PPC,
                                                                                             ).toLocaleString()}
                                                                                         </td>
                                                                                     )}
@@ -1741,7 +1574,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                 type="number"
                                                                                                 step="any"
                                                                                                 value={
-                                                                                                    prod.DC원화
+                                                                                                    rawProd.DC원화
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1760,7 +1593,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     ) : (
                                                                                         <td className="p-2 text-right text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
                                                                                             {
-                                                                                                prod.DC원화
+                                                                                                calcProd.DC원화
                                                                                             }
 
                                                                                             %
@@ -1768,12 +1601,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     )}
                                                                                     <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
                                                                                         ₩
-                                                                                        {supplyPrice.toLocaleString()}
+                                                                                        {Number(
+                                                                                            calcProd.공급가,
+                                                                                        ).toLocaleString()}
                                                                                     </td>
                                                                                     <td className="p-2 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/50">
                                                                                         ₩
                                                                                         {Math.round(
-                                                                                            margin,
+                                                                                            Number(
+                                                                                                calcProd.마진,
+                                                                                            ),
                                                                                         ).toLocaleString()}
                                                                                     </td>
                                                                                     {isEditing &&
@@ -1785,10 +1622,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                     type="number"
                                                                                                     step="any"
                                                                                                     value={
-                                                                                                        prod.마진율 !==
+                                                                                                        rawProd.마진율 !==
                                                                                                         undefined
-                                                                                                            ? prod.마진율
-                                                                                                            : marginPercent
+                                                                                                            ? rawProd.마진율
+                                                                                                            : calcProd.마진율
                                                                                                     }
                                                                                                     onChange={(
                                                                                                         e,
@@ -1811,7 +1648,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     ) : (
                                                                                         <td className="p-2 text-right font-bold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/50">
                                                                                             {
-                                                                                                marginPercent
+                                                                                                calcProd.마진율
                                                                                             }
 
                                                                                             %
@@ -1822,7 +1659,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             <input
                                                                                                 type="number"
                                                                                                 value={
-                                                                                                    prod.년차
+                                                                                                    rawProd.년차
                                                                                                 }
                                                                                                 onChange={(
                                                                                                     e,
@@ -1840,7 +1677,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         ) : (
                                                                                             <div className="text-center px-2">
                                                                                                 {
-                                                                                                    prod.년차
+                                                                                                    calcProd.년차
                                                                                                 }
                                                                                             </div>
                                                                                         )}
