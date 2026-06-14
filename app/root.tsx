@@ -13,6 +13,20 @@ import {
     useSubmit,
 } from "react-router";
 
+import {
+    Home,
+    FilePlus,
+    Package,
+    UserCircle,
+    Building2,
+    Users,
+    UserCheck,
+    BarChart3,
+    LogOut,
+    Sun,
+    Moon,
+    LogIn,
+} from "lucide-react";
 import type { Route } from "./+types/root";
 import "./app.css";
 
@@ -42,14 +56,14 @@ export function meta({}: Route.MetaArgs) {
 }
 
 const navItems = [
-    { path: "/", label: "견적 목록" },
-    { path: "/quoting", label: "견적 등록" },
-    { path: "/products", label: "제품 목록" },
-    { path: "/ams", label: "AM 목록" },
-    { path: "/partners", label: "파트너사 목록" },
-    { path: "/contacts", label: "파트너사 담당자 목록" },
-    { path: "/dist", label: "총판 담당자 목록" },
-    { path: "/stats", label: "통계" },
+    { path: "/", label: "견적 목록", icon: Home },
+    { path: "/quoting", label: "견적 등록", icon: FilePlus },
+    { path: "/products", label: "제품 목록", icon: Package },
+    { path: "/ams", label: "AM 목록", icon: UserCircle },
+    { path: "/partners", label: "파트너사 목록", icon: Building2 },
+    { path: "/contacts", label: "파트너사 담당자 목록", icon: Users },
+    { path: "/dist", label: "총판 담당자 목록", icon: UserCheck },
+    { path: "/stats", label: "통계", icon: BarChart3 },
 ];
 
 // 1. 보안이 강화된 HTTP-Only 쿠키 설정
@@ -179,8 +193,9 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
                         type="submit"
                         name="intent"
                         value="login"
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-md transition-colors"
+                        className="w-full inline-flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800"
                     >
+                        <LogIn className="w-5 h-5 mr-2" />
                         접속하기
                     </button>
                 </Form>
@@ -201,11 +216,14 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
                                         to={item.path}
                                         prefetch="intent"
                                         className={({ isActive }) =>
-                                            isActive
-                                                ? "font-bold text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 pb-4"
-                                                : "text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400 pb-4 transition-colors"
+                                            `flex items-center transition-colors pb-4 ${
+                                                isActive
+                                                    ? "font-bold text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
+                                                    : "text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400"
+                                            }`
                                         }
                                     >
+                                        <item.icon className="w-4 h-4 mr-1.5" />
                                         {item.label}
                                     </NavLink>
                                 </li>
@@ -215,17 +233,26 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
                     <div className="flex items-center ml-6 flex-shrink-0 space-x-3">
                         <button
                             onClick={handleLogout}
-                            className="text-sm px-3 py-1.5 rounded-md font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                            className="inline-flex items-center text-sm px-3 py-1.5 rounded-md font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500"
                             title="로그아웃"
                         >
+                            <LogOut className="w-4 h-4 mr-1.5" />
                             로그아웃
                         </button>
                         <button
                             onClick={toggleTheme}
-                            className="p-2 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center justify-center w-10 h-10 shadow-sm border border-gray-200 dark:border-gray-600"
+                            className="p-2 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors flex items-center justify-center w-10 h-10 shadow-sm border border-gray-200 dark:border-gray-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500"
                             title="테마 변경"
                         >
-                            {mounted ? (isDarkMode ? "☀️" : "🌙") : "🌙"}
+                            {mounted ? (
+                                isDarkMode ? (
+                                    <Sun className="w-5 h-5 text-amber-500" />
+                                ) : (
+                                    <Moon className="w-5 h-5 text-blue-500" />
+                                )
+                            ) : (
+                                <Moon className="w-5 h-5 text-blue-500" />
+                            )}
                         </button>
                     </div>
                 </nav>

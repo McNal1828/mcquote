@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
     useSubmit,
     redirect,
@@ -7,6 +7,21 @@ import {
 } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/quoting";
+import {
+    Building2,
+    Users,
+    UserCircle,
+    ClipboardList,
+    Package,
+    FileText,
+    Plus,
+    Save,
+    Trash2,
+    X,
+    Download,
+    AlertCircle,
+    CheckCircle2,
+} from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
     // 제품(products) 목록을 DB에서 불러옵니다.
@@ -137,6 +152,24 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
 
     // 4. 계산 기준 모드 상태 관리 (기본값: DC원화 기준)
     const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN">("DC");
+
+    const [toast, setToast] = useState<{
+        message: string;
+        type: "error" | "success";
+    } | null>(null);
+
+    useEffect(() => {
+        if (toast) {
+            const timer = setTimeout(() => setToast(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [toast]);
+
+    useEffect(() => {
+        if (actionData?.error) {
+            setToast({ message: actionData.error, type: "error" });
+        }
+    }, [actionData]);
 
     // 기본 정보 입력 핸들러
     const handleBasicInfoChange = (
@@ -548,13 +581,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 견적 등록
             </h1>
 
-            {/* 서버 저장 실패 시 에러 메시지 표시 */}
-            {actionData?.error && (
-                <div className="mb-6 p-4 bg-red-100 text-red-700 border border-red-400 rounded">
-                    {actionData.error}
-                </div>
-            )}
-
             <form
                 onSubmit={handleSubmit}
                 onKeyDown={(e) => {
@@ -604,7 +630,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     {/* 고객사 정보 */}
                     <div className="space-y-3">
                         <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center border-b dark:border-gray-700 pb-2">
-                            <span className="mr-2">🏢</span> 고객사 정보
+                            <Building2 className="w-5 h-5 mr-2 text-gray-500" />{" "}
+                            고객사 정보
                         </h4>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -659,7 +686,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     {/* 파트너사 정보 */}
                     <div className="space-y-3">
                         <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center border-b dark:border-gray-700 pb-2">
-                            <span className="mr-2">🤝</span> 파트너사 정보
+                            <Users className="w-5 h-5 mr-2 text-gray-500" />{" "}
+                            파트너사 정보
                         </h4>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -733,7 +761,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     {/* 영업 정보 */}
                     <div className="space-y-3">
                         <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center border-b dark:border-gray-700 pb-2">
-                            <span className="mr-2">👤</span> 영업 정보
+                            <UserCircle className="w-5 h-5 mr-2 text-gray-500" />{" "}
+                            영업 정보
                         </h4>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -846,7 +875,8 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
-                            <span className="mr-2">📦</span> 제품 상세
+                            <Package className="w-5 h-5 mr-2 text-gray-500" />{" "}
+                            제품 상세
                         </h3>
                         <div className="flex items-center gap-4">
                             {/* 계산 기준 선택 영역 */}
@@ -897,9 +927,9 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             <button
                                 type="button"
                                 onClick={handleAddProduct}
-                                className="bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/50 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 h-8 px-3 border border-blue-200 dark:border-blue-800"
                             >
-                                + 제품 추가
+                                <Plus className="w-4 h-4 mr-1" /> 제품 추가
                             </button>
                         </div>
                     </div>
@@ -1202,10 +1232,10 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                                 idx,
                                                             )
                                                         }
-                                                        className="text-red-500 hover:text-red-700 font-bold transition-colors"
+                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8"
                                                         title="삭제"
                                                     >
-                                                        삭제
+                                                        <Trash2 className="w-4 h-4" />
                                                     </button>
                                                 </td>
                                             </tr>
@@ -1226,14 +1256,15 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
-                            <span className="mr-2">📝</span> 비고
+                            <FileText className="w-5 h-5 mr-2 text-gray-500" />{" "}
+                            비고
                         </h3>
                         <button
                             type="button"
                             onClick={handleAddNote}
-                            className="bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-600 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                            className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 h-8 px-3 shadow-sm"
                         >
-                            + 비고 추가
+                            <Plus className="w-4 h-4 mr-1" /> 비고 추가
                         </button>
                     </div>
                     <div className="space-y-2">
@@ -1247,15 +1278,15 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                     onChange={(e) =>
                                         handleNoteChange(idx, e.target.value)
                                     }
-                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 min-h-[40px] resize-y"
+                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[40px] transition-shadow resize-y"
                                     placeholder="비고 내용을 입력하세요"
                                 />
                                 <button
                                     type="button"
                                     onClick={() => handleRemoveNote(idx)}
-                                    className="text-red-500 hover:text-red-700 font-bold p-2 mt-1 whitespace-nowrap"
+                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8 mt-1"
                                 >
-                                    삭제
+                                    <Trash2 className="w-4 h-4" />
                                 </button>
                             </div>
                         ))}
@@ -1271,26 +1302,48 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 <div className="flex justify-end gap-3 pt-4">
                     <button
                         type="button"
-                        className="px-6 py-2.5 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 font-medium transition-colors"
+                        onClick={() => window.history.back()}
+                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-10 px-6"
                     >
                         취소
                     </button>
                     <button
                         type="button"
                         onClick={() => handleDownloadExcel(products)}
-                        className="px-6 py-2.5 rounded border border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30 font-medium transition-colors"
+                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-white text-green-600 border border-green-600 hover:bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-500 dark:hover:bg-green-900/30 h-10 px-6 shadow-sm"
                     >
-                        원가표/견적서 다운로드
+                        <Download className="w-4 h-4 mr-1.5" /> 원가표/견적서
+                        다운로드
                     </button>
                     <button
                         type="submit"
                         disabled={isSubmitting}
-                        className={`px-6 py-2.5 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium shadow-sm transition-colors ${isSubmitting ? "opacity-70 cursor-not-allowed" : ""}`}
+                        className={`inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-600 text-white hover:bg-blue-700 h-10 px-6 shadow ${isSubmitting ? "opacity-70 cursor-not-allowed" : ""}`}
                     >
-                        {isSubmitting ? "등록 중..." : "견적 등록하기"}
+                        {isSubmitting ? (
+                            "등록 중..."
+                        ) : (
+                            <>
+                                <Save className="w-4 h-4 mr-1.5" /> 견적
+                                등록하기
+                            </>
+                        )}
                     </button>
                 </div>
             </form>
+
+            {toast && (
+                <div
+                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${toast.type === "error" ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"} transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
+                >
+                    {toast.type === "error" ? (
+                        <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400" />
+                    ) : (
+                        <CheckCircle2 className="w-5 h-5 text-green-400 dark:text-green-600" />
+                    )}
+                    <p className="text-sm font-medium">{toast.message}</p>
+                </div>
+            )}
         </div>
     );
 }

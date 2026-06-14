@@ -3,6 +3,19 @@ import { useFetcher } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/dist";
 import { useTableFeatures } from "./useTableFeatures";
+import {
+    Plus,
+    Save,
+    Trash2,
+    X,
+    AlertCircle,
+    CheckCircle2,
+    ChevronDown,
+    ChevronUp,
+    ChevronsUpDown,
+    Edit2,
+    UserCheck,
+} from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
@@ -76,16 +89,49 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
     const addFetcher = useFetcher();
     const formRef = useRef<HTMLFormElement>(null);
 
-    // 추가 성공 시 입력 폼 초기화
+    const [toast, setToast] = useState<{
+        message: string;
+        type: "error" | "success";
+    } | null>(null);
+
     useEffect(() => {
-        if (
-            addFetcher.state === "idle" &&
-            addFetcher.data?.success &&
-            addFetcher.data?.intent === "add"
-        ) {
-            formRef.current?.reset();
+        if (toast) {
+            const timer = setTimeout(() => setToast(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [toast]);
+
+    useEffect(() => {
+        if (addFetcher.state === "idle" && addFetcher.data) {
+            if (addFetcher.data.error) {
+                setToast({ message: addFetcher.data.error, type: "error" });
+            } else if (
+                addFetcher.data.success &&
+                addFetcher.data.intent === "add"
+            ) {
+                setToast({
+                    message: "성공적으로 추가되었습니다.",
+                    type: "success",
+                });
+                formRef.current?.reset();
+            }
         }
     }, [addFetcher.state, addFetcher.data]);
+
+    useEffect(() => {
+        if (fetcher.state === "idle" && fetcher.data) {
+            if (fetcher.data.error) {
+                setToast({ message: fetcher.data.error, type: "error" });
+            } else if (fetcher.data.success) {
+                let msg = "성공적으로 처리되었습니다.";
+                if (fetcher.data.intent === "edit")
+                    msg = "성공적으로 수정되었습니다.";
+                if (fetcher.data.intent === "delete")
+                    msg = "성공적으로 삭제되었습니다.";
+                setToast({ message: msg, type: "success" });
+            }
+        }
+    }, [fetcher.state, fetcher.data]);
 
     const [editingId, setEditingId] = useState<number | null>(null);
     const [editForm, setEditForm] = useState({
@@ -137,8 +183,12 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                 >
                     <span>{label}</span>
                     {isSorted ? (
-                        <span className="ml-1 text-blue-500 text-right">
-                            {direction === "desc" ? "▼" : "▲"}
+                        <span className="ml-1 text-blue-500 text-right flex items-center">
+                            {direction === "desc" ? (
+                                <ChevronDown className="w-4 h-4" />
+                            ) : (
+                                <ChevronUp className="w-4 h-4" />
+                            )}
                             {sortRules.length > 1 && (
                                 <sup className="text-[10px] ml-0.5">
                                     {ruleIndex + 1}
@@ -146,8 +196,8 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                             )}
                         </span>
                     ) : (
-                        <span className="ml-1 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity text-right">
-                            ↕
+                        <span className="ml-1 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity text-right flex items-center">
+                            <ChevronsUpDown className="w-4 h-4" />
                         </span>
                     )}
                 </div>
@@ -158,7 +208,7 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                         handleFilterChange(sortKey, e.target.value)
                     }
                     placeholder={`${label} 검색`}
-                    className="w-full text-xs font-normal px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 dark:focus:ring-blue-500"
+                    className="w-full text-xs font-normal px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-500 transition-shadow"
                 />
             </th>
         );
@@ -173,7 +223,8 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
             {/* 새 총판 담당자 추가 폼 영역 */}
             <div className="mb-8 bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                 <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
-                    <span className="mr-2">➕</span> 새 총판 담당자 추가
+                    <UserCheck className="w-5 h-5 mr-2 text-blue-500" /> 새 총판
+                    담당자 추가
                 </h2>
                 <addFetcher.Form
                     method="post"
@@ -189,7 +240,7 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                             type="text"
                             name="name"
                             required
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
                             placeholder="예: 김철수"
                         />
                     </div>
@@ -200,26 +251,26 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                         <input
                             type="text"
                             name="position"
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
                             placeholder="예: 과장"
                         />
                     </div>
                     <div>
                         <button
                             type="submit"
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors"
+                            disabled={addFetcher.state === "submitting"}
+                            className="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-600 text-white hover:bg-blue-700 h-9 px-4 shadow disabled:opacity-70 disabled:cursor-not-allowed"
                         >
-                            {addFetcher.state === "submitting"
-                                ? "추가 중..."
-                                : "추가하기"}
+                            {addFetcher.state === "submitting" ? (
+                                "추가 중..."
+                            ) : (
+                                <>
+                                    <Plus className="w-4 h-4 mr-1.5" /> 추가하기
+                                </>
+                            )}
                         </button>
                     </div>
                 </addFetcher.Form>
-                {addFetcher.data?.error && addFetcher.data.intent === "add" && (
-                    <p className="mt-3 text-red-500 text-sm font-medium">
-                        {addFetcher.data.error}
-                    </p>
-                )}
             </div>
 
             <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
@@ -283,24 +334,27 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                                                     onClick={() =>
                                                         handleSave(contact.id)
                                                     }
-                                                    className="text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 font-medium transition-colors"
+                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-600 text-white hover:bg-green-700 h-7 px-2.5 shadow"
                                                 >
+                                                    <Save className="w-3 h-3 mr-1" />{" "}
                                                     저장
                                                 </button>
                                                 <button
                                                     onClick={() =>
                                                         handleDelete(contact.id)
                                                     }
-                                                    className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 font-medium transition-colors"
+                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 bg-red-600 text-white hover:bg-red-700 h-7 px-2.5 shadow"
                                                 >
+                                                    <Trash2 className="w-3 h-3 mr-1" />{" "}
                                                     삭제
                                                 </button>
                                                 <button
                                                     onClick={() =>
                                                         setEditingId(null)
                                                     }
-                                                    className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 font-medium transition-colors"
+                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-2.5"
                                                 >
+                                                    <X className="w-3 h-3 mr-1" />{" "}
                                                     취소
                                                 </button>
                                             </td>
@@ -318,8 +372,9 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                                                     onClick={() =>
                                                         handleEditClick(contact)
                                                     }
-                                                    className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium transition-colors"
+                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-3 shadow-sm"
                                                 >
+                                                    <Edit2 className="w-3 h-3 mr-1" />{" "}
                                                     수정
                                                 </button>
                                             </td>
@@ -341,6 +396,19 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                     </tbody>
                 </table>
             </div>
+
+            {toast && (
+                <div
+                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${toast.type === "error" ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"} transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
+                >
+                    {toast.type === "error" ? (
+                        <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400" />
+                    ) : (
+                        <CheckCircle2 className="w-5 h-5 text-green-400 dark:text-green-600" />
+                    )}
+                    <p className="text-sm font-medium">{toast.message}</p>
+                </div>
+            )}
         </div>
     );
 }

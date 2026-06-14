@@ -2,6 +2,27 @@ import { useState, Fragment, useEffect } from "react";
 import { useFetcher, useSearchParams } from "react-router";
 import type { Route } from "./+types/home";
 import db from "../db.server";
+import {
+    Search,
+    Calendar,
+    Tag,
+    Download,
+    Building2,
+    Users,
+    UserCircle,
+    ClipboardList,
+    Package,
+    FileText,
+    Plus,
+    Save,
+    Trash2,
+    X,
+    AlertCircle,
+    CheckCircle2,
+    ChevronDown,
+    ChevronUp,
+    ChevronsUpDown,
+} from "lucide-react";
 
 export const handle = {
     breadcrumb: () => "홈페이지",
@@ -13,8 +34,8 @@ export const links: Route.LinksFunction = () => [
 
 export function headers({ loaderHeaders }: Route.HeadersArgs) {
     return {
-        // 브라우저가 10초 동안은 무조건 캐시를 사용하고, 그 이후에는 캐시를 보여주되 서버에서 최신 데이터를 백그라운드로 가져옵니다.
-        "Cache-Control": "max-age=10, stale-while-revalidate=50",
+        // 데이터 추가/삭제 시 즉각적인 화면 반영을 위해 브라우저 캐시를 비활성화합니다.
+        "Cache-Control": "no-cache, no-store, must-revalidate",
     };
 }
 
@@ -43,7 +64,7 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("DELETE FROM quotes WHERE id = ?");
             stmt.run(quoteId);
-            return { success: true };
+            return { success: true, intent: "delete" };
         } catch (error) {
             return { error: "삭제 중 오류가 발생했습니다." };
         }
@@ -309,14 +330,39 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     );
     const months = Array.from({ length: 12 }, (_, i) => (i + 1).toString());
 
+    // 트렌디한 Toast 알림을 위한 상태 관리
+    const [toast, setToast] = useState<{
+        message: string;
+        type: "error" | "success";
+    } | null>(null);
+
+    // Toast 알림이 3초 뒤에 자동으로 사라지도록 처리
+    useEffect(() => {
+        if (toast) {
+            const timer = setTimeout(() => setToast(null), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [toast]);
+
     // 서버 요청 완료 후 에러가 있으면 경고를, 성공했으면 편집 창을 닫도록 처리합니다.
     useEffect(() => {
         if (fetcher.state === "idle" && fetcher.data) {
             if (fetcher.data.error) {
-                alert(fetcher.data.error);
-            } else if (fetcher.data.success && fetcher.data.intent === "edit") {
-                setEditingQuoteId(null);
-                setEditOriginalUpdatedAt(null);
+                setToast({ message: fetcher.data.error, type: "error" });
+            } else if (fetcher.data.success) {
+                if (fetcher.data.intent === "edit") {
+                    setToast({
+                        message: "성공적으로 저장되었습니다.",
+                        type: "success",
+                    });
+                    setEditingQuoteId(null);
+                    setEditOriginalUpdatedAt(null);
+                } else if (fetcher.data.intent === "delete") {
+                    setToast({
+                        message: "성공적으로 삭제되었습니다.",
+                        type: "success",
+                    });
+                }
             }
         }
     }, [fetcher.state, fetcher.data]);
@@ -764,12 +810,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     <span>{label}</span>
                     {sortable &&
                         (isSorted ? (
-                            <span className="ml-1 text-blue-500 text-right">
-                                {currentSortDir === "desc" ? "▼" : "▲"}
+                            <span className="ml-1 text-blue-500 text-right flex items-center">
+                                {currentSortDir === "desc" ? (
+                                    <ChevronDown className="w-4 h-4" />
+                                ) : (
+                                    <ChevronUp className="w-4 h-4" />
+                                )}
                             </span>
                         ) : (
-                            <span className="ml-1 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity text-right">
-                                ↕
+                            <span className="ml-1 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity text-right flex items-center">
+                                <ChevronsUpDown className="w-4 h-4" />
                             </span>
                         ))}
                 </div>
@@ -806,10 +856,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             <div className="mb-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow border border-gray-200 dark:border-gray-700 flex flex-wrap items-center gap-6">
                 <div className="flex items-center gap-3">
                     <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
-                        <span className="mr-1">🔍</span> 상태 필터
+                        <Search className="w-4 h-4 mr-1.5 text-gray-500" /> 상태
+                        필터
                     </span>
                     <select
-                        className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
                         value={searchParams.get("is_ordered") ?? "0"}
                         onChange={(e) =>
                             handleFilterChange("is_ordered", e.target.value)
@@ -820,7 +871,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                         <option value="0">미오더</option>
                     </select>
                     <select
-                        className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
                         value={searchParams.get("is_lost") ?? "0"}
                         onChange={(e) =>
                             handleFilterChange("is_lost", e.target.value)
@@ -836,10 +887,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
                 <div className="flex items-center gap-3">
                     <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
-                        <span className="mr-1">📅</span> 견적일자 필터
+                        <Calendar className="w-4 h-4 mr-1.5 text-gray-500" />{" "}
+                        견적일자 필터
                     </span>
                     <select
-                        className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
                         value={searchParams.get("created_year") || ""}
                         onChange={(e) =>
                             handleFilterChange("created_year", e.target.value)
@@ -853,7 +905,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                         ))}
                     </select>
                     <select
-                        className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
                         value={searchParams.get("created_month") || ""}
                         onChange={(e) =>
                             handleFilterChange("created_month", e.target.value)
@@ -872,10 +924,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
                 <div className="flex items-center gap-3">
                     <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
-                        <span className="mr-1">🏷️</span> 벤더 필터
+                        <Tag className="w-4 h-4 mr-1.5 text-gray-500" /> 벤더
+                        필터
                     </span>
                     <select
-                        className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
                         value={searchParams.get("vendor") || ""}
                         onChange={(e) =>
                             handleFilterChange("vendor", e.target.value)
@@ -891,9 +944,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 <div className="ml-auto">
                     <button
                         onClick={handleExportExcel}
-                        className="flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium transition-colors shadow-sm"
+                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-800 bg-blue-600 text-white hover:bg-blue-700 h-9 px-4 py-2 shadow"
                     >
-                        <span>📊</span> 출력하기
+                        <Download className="w-4 h-4 mr-1.5" /> 출력하기
                     </button>
                 </div>
             </div>
@@ -905,12 +958,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                             <tr className="text-gray-800 dark:text-gray-200 divide-x divide-gray-200 dark:divide-gray-600">
                                 {renderTh("고객사", "client_company")}
                                 {renderTh("파트너사", "partner_company")}
-                                {renderTh(
-                                    "파트너 담당자",
-                                    "partner_contact_name",
-                                    { className: "w-32" },
-                                )}
-                                {renderTh("총판 담당자", "dist_contact_name", {
+                                {renderTh("담당자", "partner_contact_name", {
+                                    className: "w-32",
+                                })}
+                                {renderTh("총판", "dist_contact_name", {
                                     className: "w-28",
                                 })}
                                 {renderTh("사업명", "project_name")}
@@ -968,16 +1019,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                     </tr>
                                     {/* 펼쳐진 영역 상세 내용 */}
                                     {expandedRows.has(quote.id) && (
-                                        <tr className="no-hover !bg-blue-50 dark:!bg-indigo-950/50 border-y-2 border-blue-300 dark:border-indigo-700 shadow-inner">
+                                        <tr className="no-hover bg-slate-50/50 dark:bg-slate-900/30 border-y border-gray-200 dark:border-gray-700 shadow-inner">
                                             <td colSpan={8} className="p-6">
                                                 <div className="space-y-6">
                                                     {/* 0. 담당자 및 영업 요약 정보 */}
-                                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 bg-white dark:bg-gray-800 p-5 rounded border border-gray-200 dark:border-gray-600">
+                                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
                                                         <div>
                                                             <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
-                                                                <span className="mr-2">
-                                                                    🏢
-                                                                </span>{" "}
+                                                                <Building2 className="w-4 h-4 mr-2 text-gray-500" />
                                                                 고객사 담당자
                                                             </h4>
                                                             <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
@@ -1000,9 +1049,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                         </div>
                                                         <div>
                                                             <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
-                                                                <span className="mr-2">
-                                                                    🤝
-                                                                </span>{" "}
+                                                                <Users className="w-4 h-4 mr-2 text-gray-500" />
                                                                 파트너사 담당자
                                                             </h4>
                                                             <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
@@ -1025,9 +1072,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                         </div>
                                                         <div>
                                                             <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
-                                                                <span className="mr-2">
-                                                                    👤
-                                                                </span>{" "}
+                                                                <UserCircle className="w-4 h-4 mr-2 text-gray-500" />
                                                                 영업 정보
                                                             </h4>
                                                             <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
@@ -1058,9 +1103,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                         </div>
                                                         <div>
                                                             <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
-                                                                <span className="mr-2">
-                                                                    📋
-                                                                </span>{" "}
+                                                                <ClipboardList className="w-4 h-4 mr-2 text-gray-500" />
                                                                 사업 정보
                                                             </h4>
                                                             <div className="text-sm text-gray-600 dark:text-gray-400 space-y-2">
@@ -1085,7 +1128,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             .value,
                                                                                     )
                                                                                 }
-                                                                                className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                                                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
                                                                             />
                                                                         </div>
                                                                         <div className="flex items-center gap-4 mt-2">
@@ -1110,7 +1153,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                 : 0,
                                                                                         )
                                                                                     }
-                                                                                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                                                                                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
                                                                                 />
                                                                             </div>
                                                                             <div className="flex items-center gap-2">
@@ -1134,7 +1177,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                 : 0,
                                                                                         )
                                                                                     }
-                                                                                    className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 dark:border-gray-600 dark:bg-gray-700"
+                                                                                    className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
                                                                                 />
                                                                             </div>
                                                                         </div>
@@ -1183,12 +1226,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                     </div>
 
                                                     {/* 1. 제품 상세 테이블 */}
-                                                    <div>
+                                                    <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
                                                         <div className="flex justify-between items-center mb-4">
                                                             <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
-                                                                <span className="mr-2">
-                                                                    📦
-                                                                </span>{" "}
+                                                                <Package className="w-5 h-5 mr-2 text-gray-500" />
                                                                 제품 상세
                                                             </h3>
                                                             {editingQuoteId ===
@@ -1259,9 +1300,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         onClick={
                                                                             handleAddProduct
                                                                         }
-                                                                        className="bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-900/50 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 h-8 px-3 border border-blue-200 dark:border-blue-800"
                                                                     >
-                                                                        + 제품
+                                                                        <Plus className="w-4 h-4 mr-1" />{" "}
+                                                                        제품
                                                                         추가
                                                                     </button>
                                                                     <button
@@ -1271,8 +1313,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                 quote.id,
                                                                             )
                                                                         }
-                                                                        className="bg-green-600 text-white hover:bg-green-700 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-600 text-white hover:bg-green-700 h-8 px-3 shadow"
                                                                     >
+                                                                        <Save className="w-4 h-4 mr-1.5" />{" "}
                                                                         저장
                                                                     </button>
                                                                     <button
@@ -1282,8 +1325,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                 quote.id,
                                                                             )
                                                                         }
-                                                                        className="bg-red-600 text-white hover:bg-red-700 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 bg-red-600 text-white hover:bg-red-700 h-8 px-3 shadow"
                                                                     >
+                                                                        <Trash2 className="w-4 h-4 mr-1.5" />{" "}
                                                                         삭제
                                                                     </button>
                                                                     <button
@@ -1291,8 +1335,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         onClick={
                                                                             handleCancelEdit
                                                                         }
-                                                                        className="bg-gray-200 text-gray-800 hover:bg-gray-300 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-8 px-3"
                                                                     >
+                                                                        <X className="w-4 h-4 mr-1.5" />{" "}
                                                                         취소
                                                                     </button>
                                                                 </div>
@@ -1304,17 +1349,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                             quote,
                                                                         )
                                                                     }
-                                                                    className="bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-600 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-8 px-4 shadow-sm"
                                                                 >
                                                                     수정
                                                                 </button>
                                                             )}
                                                         </div>
 
-                                                        <div className="overflow-x-auto rounded border border-gray-200 dark:border-gray-600">
+                                                        <div className="overflow-x-auto rounded-md border border-gray-200 dark:border-gray-700">
                                                             <table className="w-full text-sm text-left table-fixed min-w-[1300px]">
-                                                                <thead className="bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-b dark:border-gray-600 whitespace-nowrap">
-                                                                    <tr className="divide-x divide-gray-200 dark:divide-gray-600">
+                                                                <thead className="bg-gray-50 dark:bg-gray-800/80 text-gray-700 dark:text-gray-300 border-b dark:border-gray-700 whitespace-nowrap">
+                                                                    <tr className="divide-x divide-gray-200 dark:divide-gray-700">
                                                                         <th className="p-2 font-semibold w-40">
                                                                             제품코드
                                                                         </th>
@@ -1773,9 +1818,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                         idx,
                                                                                                     )
                                                                                                 }
-                                                                                                className="text-red-500 hover:text-red-700 font-bold transition-colors"
+                                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8"
                                                                                             >
-                                                                                                삭제
+                                                                                                <Trash2 className="w-4 h-4" />
                                                                                             </button>
                                                                                         </td>
                                                                                     )}
@@ -1804,10 +1849,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                             : quote.project_name,
                                                                     )
                                                                 }
-                                                                className="px-5 py-2 rounded border border-green-600 text-green-600 hover:bg-green-50 dark:border-green-500 dark:text-green-400 dark:hover:bg-green-900/30 font-medium transition-colors text-sm shadow-sm"
+                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-white text-green-600 border border-green-600 hover:bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-500 dark:hover:bg-green-900/30 h-9 px-4 shadow-sm"
                                                             >
-                                                                원가표/견적서
-                                                                다운로드
+                                                                <Download className="w-4 h-4 mr-1.5" />{" "}
+                                                                다운로드 (Excel)
                                                             </button>
                                                         </div>
                                                     </div>
@@ -1819,12 +1864,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                             quote.noteList
                                                                 .length >
                                                                 0)) && (
-                                                        <div className="bg-white dark:bg-gray-800 p-5 rounded border border-gray-200 dark:border-gray-600">
+                                                        <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
                                                             <div className="flex justify-between items-center mb-4">
                                                                 <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
-                                                                    <span className="mr-2">
-                                                                        📝
-                                                                    </span>{" "}
+                                                                    <FileText className="w-5 h-5 mr-2 text-gray-500" />
                                                                     비고
                                                                 </h3>
                                                                 {editingQuoteId ===
@@ -1834,9 +1877,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         onClick={
                                                                             handleAddNote
                                                                         }
-                                                                        className="bg-gray-100 text-gray-700 border border-gray-300 hover:bg-gray-200 dark:bg-gray-700 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-600 px-3 py-1.5 rounded text-sm font-medium transition-colors"
+                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 h-8 px-3 shadow-sm"
                                                                     >
-                                                                        + 비고
+                                                                        <Plus className="w-4 h-4 mr-1" />{" "}
+                                                                        비고
                                                                         추가
                                                                     </button>
                                                                 )}
@@ -1873,7 +1917,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                 .value,
                                                                                         )
                                                                                     }
-                                                                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 min-h-[40px] resize-y"
+                                                                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow min-h-[40px] resize-y"
                                                                                     placeholder="비고 내용을 입력하세요"
                                                                                 />
                                                                                 <button
@@ -1883,16 +1927,16 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             idx,
                                                                                         )
                                                                                     }
-                                                                                    className="text-red-500 hover:text-red-700 font-bold p-2 mt-1 whitespace-nowrap"
+                                                                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8 mt-1"
                                                                                 >
-                                                                                    삭제
+                                                                                    <Trash2 className="w-4 h-4" />
                                                                                 </button>
                                                                             </div>
                                                                         ),
                                                                     )}
                                                                     {editNotes.length ===
                                                                         0 && (
-                                                                        <div className="text-center text-gray-500 dark:text-gray-400 py-4 border border-dashed border-gray-300 dark:border-gray-600 rounded">
+                                                                        <div className="text-center text-gray-500 dark:text-gray-400 py-6 border border-dashed border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/50">
                                                                             추가된
                                                                             비고가
                                                                             없습니다.
@@ -1984,6 +2028,20 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     </div>
                 </div>
             </div>
+
+            {/* 자체 구현한 트렌디한 Toast 컴포넌트 */}
+            {toast && (
+                <div
+                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${toast.type === "error" ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"} transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
+                >
+                    {toast.type === "error" ? (
+                        <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400" />
+                    ) : (
+                        <CheckCircle2 className="w-5 h-5 text-green-400 dark:text-green-600" />
+                    )}
+                    <p className="text-sm font-medium">{toast.message}</p>
+                </div>
+            )}
         </div>
     );
 }
@@ -1996,3 +2054,4 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
         </div>
     );
 }
+0;

@@ -1,7 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Form } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/stats";
+import {
+    Users,
+    Building2,
+    UserCheck,
+    ChevronDown,
+    ChevronUp,
+    Banknote,
+    FileText,
+    PieChart,
+    TrendingUp,
+} from "lucide-react";
+import {
+    BarChart,
+    Bar,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer,
+} from "recharts";
 
 export async function loader({ request }: Route.LoaderArgs) {
     const url = new URL(request.url);
@@ -25,6 +45,16 @@ export async function loader({ request }: Route.LoaderArgs) {
     const startTimestamp = new Date(`${startDate}T00:00:00`).getTime();
     const endTimestamp = new Date(`${endDate}T23:59:59.999`).getTime();
 
+    // 조회 기간 조건 (생성일 또는 수정일 중 하나라도 기간에 포함되면 조회)
+    const timeFilter =
+        "((q.created_at >= ? AND q.created_at <= ?) OR (q.updated_at >= ? AND q.updated_at <= ?))";
+    const timeParams = [
+        startTimestamp,
+        endTimestamp,
+        startTimestamp,
+        endTimestamp,
+    ];
+
     // 2. 파트너사별 통계 (내림차순, 0건 제외)
     const partnerStats = db
         .prepare(
@@ -32,13 +62,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         SELECT p.id as partner_id, p.name as partner_name, COUNT(q.id) as quote_count
         FROM quotes q
         JOIN partners p ON q.partner_id = p.id
-        WHERE q.updated_at >= ? AND q.updated_at <= ?
+        WHERE ${timeFilter}
         GROUP BY p.id, p.name
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
         )
-        .all(startTimestamp, endTimestamp);
+        .all(...timeParams);
 
     // 3. 파트너사 담당자별 통계 (내림차순, 0건 제외)
     const partnerContactStats = db
@@ -47,13 +77,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         SELECT pc.partner_id, pc.id as contact_id, pc.name as contact_name, COUNT(q.id) as quote_count
         FROM quotes q
         JOIN partner_contacts pc ON q.partner_contact_id = pc.id
-        WHERE q.updated_at >= ? AND q.updated_at <= ?
+        WHERE ${timeFilter}
         GROUP BY pc.partner_id, pc.id, pc.name
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
         )
-        .all(startTimestamp, endTimestamp);
+        .all(...timeParams);
 
     // 4. 총판 담당자별 통계 (내림차순, 0건 제외)
     const distContactStats = db
@@ -62,13 +92,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         SELECT dc.id as dist_contact_id, dc.name as dist_contact_name, COUNT(q.id) as quote_count
         FROM quotes q
         JOIN dist_contacts dc ON q.dist_contact_id = dc.id
-        WHERE q.updated_at >= ? AND q.updated_at <= ?
+        WHERE ${timeFilter}
         GROUP BY dc.id, dc.name
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
         )
-        .all(startTimestamp, endTimestamp);
+        .all(...timeParams);
 
     // UI 렌더링 편의를 위해 파트너 담당자 목록을 파트너 ID 기준으로 그룹화합니다.
     const contactsByPartner = partnerContactStats.reduce(
@@ -86,13 +116,13 @@ export async function loader({ request }: Route.LoaderArgs) {
             `
         SELECT q.vendor as vendor_name, COUNT(q.id) as quote_count
         FROM quotes q
-        WHERE q.updated_at >= ? AND q.updated_at <= ? AND q.vendor IS NOT NULL AND q.vendor != ''
+        WHERE ${timeFilter} AND q.vendor IS NOT NULL AND q.vendor != ''
         GROUP BY q.vendor
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
         )
-        .all(startTimestamp, endTimestamp);
+        .all(...timeParams);
 
     // 6. 벤더 담당자(AM)별 통계 (내림차순, 0건 제외)
     const amStats = db
@@ -101,13 +131,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         SELECT q.vendor as vendor_name, a.id as am_id, a.name as am_name, COUNT(q.id) as quote_count
         FROM quotes q
         JOIN ams a ON q.am_id = a.id
-        WHERE q.updated_at >= ? AND q.updated_at <= ? AND q.vendor IS NOT NULL AND q.vendor != ''
+        WHERE ${timeFilter} AND q.vendor IS NOT NULL AND q.vendor != ''
         GROUP BY q.vendor, a.id, a.name
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
         )
-        .all(startTimestamp, endTimestamp);
+        .all(...timeParams);
 
     // UI 렌더링 편의를 위해 벤더 담당자(AM) 목록을 벤더명 기준으로 그룹화합니다.
     const amsByVendor = amStats.reduce((acc: any, row: any) => {
@@ -115,6 +145,69 @@ export async function loader({ request }: Route.LoaderArgs) {
         acc[row.vendor_name].push(row);
         return acc;
     }, {});
+
+    // 7. 대시보드 요약 지표 및 월별 매출 추이 계산을 위한 전체 데이터 조회
+    const rawQuotes = db
+        .prepare(
+            `
+        SELECT q.products, q.created_at, q.updated_at, q.is_ordered, q.is_lost
+        FROM quotes q
+        WHERE ${timeFilter}
+    `,
+        )
+        .all(...timeParams) as any[];
+
+    let totalRevenue = 0;
+    let totalOrdered = 0;
+    let totalLost = 0;
+    let totalPending = 0;
+    const monthlyDataMap: Record<string, any> = {};
+
+    rawQuotes.forEach((q) => {
+        let revenue = 0;
+        try {
+            const prods = JSON.parse(q.products || "[]");
+            revenue = prods.reduce(
+                (sum: number, p: any) => sum + (Number(p.공급가) || 0),
+                0,
+            );
+        } catch (e) {}
+
+        // 오더된 건들(is_ordered === 1)에 대해서만 총 공급가 및 매출 추이 계산
+        if (q.is_ordered) {
+            totalRevenue += revenue;
+            totalOrdered++;
+
+            const d = new Date(q.updated_at);
+            const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            if (!monthlyDataMap[mKey]) {
+                monthlyDataMap[mKey] = { month: mKey, revenue: 0, count: 0 };
+            }
+            monthlyDataMap[mKey].revenue += revenue;
+            monthlyDataMap[mKey].count += 1;
+        } else if (q.is_lost) {
+            totalLost++;
+        } else {
+            totalPending++;
+        }
+    });
+
+    const monthlyTrend = Object.values(monthlyDataMap).sort((a: any, b: any) =>
+        a.month.localeCompare(b.month),
+    );
+    const winRate =
+        rawQuotes.length > 0
+            ? ((totalOrdered / rawQuotes.length) * 100).toFixed(1)
+            : "0.0";
+
+    const summary = {
+        totalQuotes: rawQuotes.length,
+        totalRevenue,
+        totalOrdered,
+        totalLost,
+        totalPending,
+        winRate,
+    };
 
     return {
         startDate,
@@ -124,6 +217,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         distContactStats,
         vendorStats,
         amsByVendor,
+        summary,
+        monthlyTrend,
     };
 }
 
@@ -136,6 +231,8 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
         distContactStats,
         vendorStats,
         amsByVendor,
+        summary,
+        monthlyTrend,
     } = loaderData;
     const [expandedPartners, setExpandedPartners] = useState<Set<number>>(
         new Set(),
@@ -143,6 +240,11 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
     const [expandedVendors, setExpandedVendors] = useState<Set<string>>(
         new Set(),
     );
+    const [mounted, setMounted] = useState(false);
+
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     const togglePartner = (id: number) => {
         setExpandedPartners((prev) => {
@@ -162,53 +264,186 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
         });
     };
 
+    // 차트용 커스텀 툴팁 (shadcn 스타일)
+    const CustomTooltip = ({ active, payload, label }: any) => {
+        if (active && payload && payload.length) {
+            return (
+                <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-lg shadow-lg">
+                    <p className="font-semibold text-gray-800 dark:text-gray-200 mb-2">
+                        {label}월
+                    </p>
+                    <div className="flex flex-col gap-1 text-sm">
+                        <p className="text-blue-600 dark:text-blue-400 font-medium">
+                            매출: ₩{payload[0].value.toLocaleString()}
+                        </p>
+                        <p className="text-gray-500 dark:text-gray-400">
+                            견적 건수: {payload[0].payload.count}건
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+        return null;
+    };
+
     return (
         <div className="p-8 w-full max-w-[1600px] mx-auto">
-            <h1 className="text-3xl font-bold mb-6 dark:text-white">통계</h1>
-
-            {/* 구역 1: 날짜 기간 선택 필터 */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 mb-6 flex flex-col md:flex-row md:items-end gap-4">
-                <Form method="get" className="flex items-end gap-4 w-full">
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            시작 날짜
-                        </label>
-                        <input
-                            type="date"
-                            name="startDate"
-                            defaultValue={startDate}
-                            className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 dark:[color-scheme:dark]"
-                        />
-                    </div>
-                    <div className="text-gray-500 dark:text-gray-400 mb-2 font-medium">
-                        ~
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-                            종료 날짜
-                        </label>
-                        <input
-                            type="date"
-                            name="endDate"
-                            defaultValue={endDate}
-                            className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 dark:[color-scheme:dark]"
-                        />
-                    </div>
+            {/* 상단: 타이틀 및 날짜 필터 */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                <h1 className="text-3xl font-bold dark:text-white">
+                    통계 대시보드
+                </h1>
+                <Form
+                    method="get"
+                    className="flex items-center gap-2 bg-white dark:bg-gray-800 p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm"
+                >
+                    <input
+                        type="date"
+                        name="startDate"
+                        defaultValue={startDate}
+                        className="bg-transparent px-2 py-1 text-sm text-gray-700 dark:text-gray-300 focus:outline-none dark:[color-scheme:dark]"
+                    />
+                    <span className="text-gray-400 text-sm">~</span>
+                    <input
+                        type="date"
+                        name="endDate"
+                        defaultValue={endDate}
+                        className="bg-transparent px-2 py-1 text-sm text-gray-700 dark:text-gray-300 focus:outline-none dark:[color-scheme:dark]"
+                    />
                     <button
                         type="submit"
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-6 rounded transition-colors shadow-sm"
+                        className="bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
                     >
-                        조회하기
+                        조회
                     </button>
                 </Form>
             </div>
 
-            {/* 구역 2: 통계 테이블 영역 (가로 3분할) */}
+            {/* 구역 1: 핵심 요약 지표 (Summary Cards) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                            총 공급가 (매출)
+                        </h3>
+                        <Banknote className="w-4 h-4 text-gray-400" />
+                    </div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                        ₩{summary.totalRevenue.toLocaleString()}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                        조회 기간 내 누적 금액
+                    </p>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                            총 견적 건수
+                        </h3>
+                        <FileText className="w-4 h-4 text-gray-400" />
+                    </div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {summary.totalQuotes}건
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                        <span className="text-blue-500 font-medium">
+                            오더 {summary.totalOrdered}
+                        </span>
+                        <span className="text-red-500 font-medium">
+                            실주 {summary.totalLost}
+                        </span>
+                        <span className="text-yellow-500 font-medium">
+                            진행중 {summary.totalPending}
+                        </span>
+                    </div>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                            수주 성공률 (Win Rate)
+                        </h3>
+                        <PieChart className="w-4 h-4 text-gray-400" />
+                    </div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">
+                        {summary.winRate}%
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">
+                        전체 견적 대비 오더 완료 비율
+                    </p>
+                </div>
+            </div>
+
+            {/* 구역 2: 월별 매출 추이 차트 */}
+            <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm mb-6">
+                <h3 className="text-base font-bold mb-6 dark:text-white flex items-center">
+                    <TrendingUp className="w-5 h-5 mr-2 text-blue-500" /> 월별
+                    매출 추이
+                </h3>
+                <div className="h-[300px] w-full">
+                    {mounted ? (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart
+                                data={monthlyTrend}
+                                margin={{
+                                    top: 0,
+                                    right: 0,
+                                    left: 10,
+                                    bottom: 0,
+                                }}
+                            >
+                                <CartesianGrid
+                                    strokeDasharray="3 3"
+                                    vertical={false}
+                                    stroke="#e5e7eb"
+                                />
+                                <XAxis
+                                    dataKey="month"
+                                    axisLine={false}
+                                    tickLine={false}
+                                    tick={{ fontSize: 12, fill: "#6b7280" }}
+                                    dy={10}
+                                />
+                                <YAxis
+                                    yAxisId="left"
+                                    axisLine={false}
+                                    tickLine={false}
+                                    tick={{ fontSize: 12, fill: "#6b7280" }}
+                                    tickFormatter={(value) =>
+                                        value >= 100000000
+                                            ? `${(value / 100000000).toFixed(0)}억`
+                                            : `${(value / 10000).toFixed(0)}만`
+                                    }
+                                />
+                                <Tooltip
+                                    content={<CustomTooltip />}
+                                    cursor={{ fill: "rgba(0,0,0,0.05)" }}
+                                />
+                                <Bar
+                                    yAxisId="left"
+                                    dataKey="revenue"
+                                    fill="#3b82f6"
+                                    radius={[4, 4, 0, 0]}
+                                    maxBarSize={50}
+                                />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    ) : (
+                        <div className="w-full h-full flex items-center justify-center text-gray-400">
+                            차트를 불러오는 중...
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* 구역 3: 통계 테이블 영역 (가로 3분할) */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* 왼쪽: 파트너사 별 견적 건수 */}
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                     <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center border-b dark:border-gray-700 pb-3">
-                        <span className="mr-2">🤝</span> 파트너사별 횟수
+                        <Users className="w-5 h-5 mr-2 text-blue-500" />{" "}
+                        파트너사별 횟수
                     </h2>
                     <div className="space-y-2">
                         {(partnerStats as any[]).map((partner) => (
@@ -232,9 +467,11 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
                                         <span className="text-gray-400 text-xs">
                                             {expandedPartners.has(
                                                 partner.partner_id,
-                                            )
-                                                ? "▲"
-                                                : "▼"}
+                                            ) ? (
+                                                <ChevronUp className="w-4 h-4" />
+                                            ) : (
+                                                <ChevronDown className="w-4 h-4" />
+                                            )}
                                         </span>
                                     </div>
                                 </div>
@@ -281,7 +518,8 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
                 {/* 가운데: 벤더별 견적 건수 */}
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                     <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center border-b dark:border-gray-700 pb-3">
-                        <span className="mr-2">🏢</span> 벤더별 횟수
+                        <Building2 className="w-5 h-5 mr-2 text-purple-500" />{" "}
+                        벤더별 횟수
                     </h2>
                     <div className="space-y-2">
                         {(vendorStats as any[]).map((vendor) => (
@@ -305,9 +543,11 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
                                         <span className="text-gray-400 text-xs">
                                             {expandedVendors.has(
                                                 vendor.vendor_name,
-                                            )
-                                                ? "▲"
-                                                : "▼"}
+                                            ) ? (
+                                                <ChevronUp className="w-4 h-4" />
+                                            ) : (
+                                                <ChevronDown className="w-4 h-4" />
+                                            )}
                                         </span>
                                     </div>
                                 </div>
@@ -348,7 +588,8 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
                 {/* 오른쪽: 총판 담당자 별 견적 건수 */}
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                     <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center border-b dark:border-gray-700 pb-3">
-                        <span className="mr-2">👤</span> 총판 담당자별 횟수
+                        <UserCheck className="w-5 h-5 mr-2 text-green-500" />{" "}
+                        총판 담당자별 횟수
                     </h2>
                     <ul className="space-y-2">
                         {(distContactStats as any[]).map((dist) => (
