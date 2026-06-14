@@ -190,7 +190,7 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
 
     // 로그인 성공 시 (정상 라우터 화면 렌더링)
     return (
-        <>
+        <div className="flex flex-col min-h-screen">
             <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-50">
                 <nav className="container mx-auto px-4 flex items-center justify-between">
                     <div className="overflow-x-auto w-full no-scrollbar">
@@ -229,10 +229,13 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
                     </div>
                 </nav>
             </header>
-            <main>
+            <main className="flex-grow">
                 <Outlet />
             </main>
-        </>
+            <footer className="py-6 mt-auto text-center text-sm text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+                &copy; {new Date().getFullYear()} McNal. All rights reserved.
+            </footer>
+        </div>
     );
 }
 
