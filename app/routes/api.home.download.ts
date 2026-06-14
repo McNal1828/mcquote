@@ -54,6 +54,12 @@ export async function loader({ request }: Route.LoaderArgs) {
         params.push(createdMonth.padStart(2, "0"));
     }
 
+    const vendor = url.searchParams.get("vendor");
+    if (vendor) {
+        conditions.push("q.vendor = ?");
+        params.push(vendor);
+    }
+
     const whereClause =
         conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 

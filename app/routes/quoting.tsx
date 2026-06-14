@@ -10,7 +10,9 @@ import type { Route } from "./+types/quoting";
 
 export async function loader({ request }: Route.LoaderArgs) {
     // 제품(products) 목록을 DB에서 불러옵니다.
-    const stmt = db.prepare("SELECT code, description, lpd, lpw FROM products");
+    const stmt = db.prepare(
+        "SELECT code, description, lpd, lpw, vendor FROM products",
+    );
     const products = stmt.all();
 
     const partners = db
@@ -21,7 +23,9 @@ export async function loader({ request }: Route.LoaderArgs) {
             "SELECT id, partner_id, name, email, phone FROM partner_contacts ORDER BY name ASC",
         )
         .all();
-    const ams = db.prepare("SELECT id, name FROM ams ORDER BY name ASC").all();
+    const ams = db
+        .prepare("SELECT id, name, vendor FROM ams ORDER BY name ASC")
+        .all();
     const distContacts = db
         .prepare(
             "SELECT id, name, position FROM dist_contacts ORDER BY name ASC",
@@ -43,8 +47,8 @@ export async function action({ request }: Route.ActionArgs) {
                 client_company, client_contact_name, client_contact_email, client_contact_phone,
                 project_name, quote_type, products, created_at, updated_at, 
                 contract_type, deal_flow, stage, note,
-                partner_id, partner_contact_id, am_id, dist_contact_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                partner_id, partner_contact_id, am_id, dist_contact_id, vendor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         stmt.run(
@@ -67,6 +71,7 @@ export async function action({ request }: Route.ActionArgs) {
                 : null,
             basicInfo.amId ? Number(basicInfo.amId) : null,
             basicInfo.distContactId ? Number(basicInfo.distContactId) : null,
+            basicInfo.vendor,
         );
 
         // 성공적으로 저장되면 홈(견적 목록) 페이지로 이동합니다.
@@ -86,6 +91,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     // 1. 기본 및 담당자/영업 정보 상태 관리
     const [basicInfo, setBasicInfo] = useState({
         projectName: "",
+        vendor: "",
         clientCompany: "",
         clientName: "",
         clientEmail: "",
@@ -133,24 +139,56 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN">("DC");
 
     // 기본 정보 입력 핸들러
-    const handleBasicInfoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleBasicInfoChange = (
+        e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
+    ) => {
         const { name, value } = e.target;
+        // 벤더가 변경될 경우, AM과 제품 목록을 초기화하여 충돌을 방지합니다.
+        if (name === "vendor") {
+            setBasicInfo((prev) => ({
+                ...prev,
+                vendor: value,
+                amId: "",
+                amName: "",
+            }));
+            setProducts([
+                {
+                    제품코드: "",
+                    제품설명: "",
+                    lpd: 0,
+                    lpw: 0,
+                    수량: 1,
+                    기간: 1,
+                    DC달러: 0,
+                    환율: 0,
+                    DC원화: 0,
+                    공급가: 0,
+                    마진: 0,
+                    년차: 1,
+                    원화PPC: 0,
+                    마진율: "0.0",
+                },
+            ]);
+            return;
+        }
         setBasicInfo((prev) => {
             const next = { ...prev, [name]: value };
 
-            if (name === "partnerCompany") {
+            if (name === "partnerId") {
                 const matchedPartner = loaderData.partners.find(
-                    (p: any) => p.name === value,
+                    (p: any) => p.id.toString() === value,
                 );
-                next.partnerId = matchedPartner ? matchedPartner.id : "";
-            } else if (name === "partnerName") {
+                next.partnerCompany = matchedPartner ? matchedPartner.name : "";
+                next.partnerContactId = "";
+                next.partnerName = "";
+                next.partnerEmail = "";
+                next.partnerPhone = "";
+            } else if (name === "partnerContactId") {
                 const matchedContact = loaderData.partnerContacts.find(
-                    (c: any) =>
-                        c.name === value &&
-                        (!next.partnerId || c.partner_id == next.partnerId),
+                    (c: any) => c.id.toString() === value,
                 );
                 if (matchedContact) {
-                    next.partnerContactId = matchedContact.id;
+                    next.partnerName = matchedContact.name;
                     next.partnerEmail = matchedContact.email || "";
                     next.partnerPhone = matchedContact.phone || "";
                     if (!next.partnerId) {
@@ -159,23 +197,25 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                         );
                         if (p) {
                             next.partnerCompany = p.name;
-                            next.partnerId = p.id;
+                            next.partnerId = p.id.toString();
                         }
                     }
                 } else {
-                    next.partnerContactId = "";
+                    next.partnerName = "";
+                    next.partnerEmail = "";
+                    next.partnerPhone = "";
                 }
-            } else if (name === "amName") {
+            } else if (name === "amId") {
                 const matchedAm = loaderData.ams.find(
-                    (a: any) => a.name === value,
+                    (a: any) => a.id.toString() === value,
                 );
-                next.amId = matchedAm ? matchedAm.id : "";
-            } else if (name === "distContactName") {
+                next.amName = matchedAm ? matchedAm.name : "";
+            } else if (name === "distContactId") {
                 const matchedDistContact = loaderData.distContacts.find(
-                    (d: any) => d.name === value,
+                    (d: any) => d.id.toString() === value,
                 );
-                next.distContactId = matchedDistContact
-                    ? matchedDistContact.id
+                next.distContactName = matchedDistContact
+                    ? matchedDistContact.name
                     : "";
             }
             return next;
@@ -515,34 +555,6 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 </div>
             )}
 
-            {/* 파트너사 및 담당자 자동완성(콤보박스)을 위한 datalist */}
-            <datalist id="partner-list">
-                {loaderData.partners.map((p: any) => (
-                    <option key={p.id} value={p.name} />
-                ))}
-            </datalist>
-            <datalist id="contact-list">
-                {loaderData.partnerContacts
-                    .filter(
-                        (c: any) =>
-                            !basicInfo.partnerId ||
-                            c.partner_id == basicInfo.partnerId,
-                    )
-                    .map((c: any) => (
-                        <option key={c.id} value={c.name} />
-                    ))}
-            </datalist>
-            <datalist id="am-list">
-                {loaderData.ams.map((a: any) => (
-                    <option key={a.id} value={a.name} />
-                ))}
-            </datalist>
-            <datalist id="dist-contact-list">
-                {loaderData.distContacts.map((d: any) => (
-                    <option key={d.id} value={d.name} />
-                ))}
-            </datalist>
-
             <form
                 onSubmit={handleSubmit}
                 onKeyDown={(e) => {
@@ -556,7 +568,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 className="space-y-6"
             >
                 {/* 0. 기본 프로젝트 정보 (상단 추가) */}
-                <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 grid grid-cols-1 gap-4">
+                <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                             사업명
@@ -569,6 +581,21 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                             placeholder="예: 차세대 인프라 구축"
                         />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            벤더
+                        </label>
+                        <select
+                            name="vendor"
+                            value={basicInfo.vendor}
+                            onChange={handleBasicInfoChange}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                            <option value="">벤더 선택</option>
+                            <option value="Broadcom">Broadcom</option>
+                            <option value="Omnissa">Omnissa</option>
+                        </select>
                     </div>
                 </div>
 
@@ -638,27 +665,44 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             <label className="block text-xs font-medium text-gray-500 mb-1">
                                 파트너사명
                             </label>
-                            <input
-                                type="text"
-                                list="partner-list"
-                                name="partnerCompany"
-                                value={basicInfo.partnerCompany}
+                            <select
+                                name="partnerId"
+                                value={basicInfo.partnerId}
                                 onChange={handleBasicInfoChange}
                                 className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm"
-                            />
+                            >
+                                <option value="">파트너사 선택</option>
+                                {loaderData.partners.map((p: any) => (
+                                    <option key={p.id} value={p.id}>
+                                        {p.name}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
                                 담당자 이름
                             </label>
-                            <input
-                                type="text"
-                                list="contact-list"
-                                name="partnerName"
-                                value={basicInfo.partnerName}
+                            <select
+                                name="partnerContactId"
+                                value={basicInfo.partnerContactId}
                                 onChange={handleBasicInfoChange}
                                 className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm"
-                            />
+                            >
+                                <option value="">담당자 선택</option>
+                                {loaderData.partnerContacts
+                                    .filter(
+                                        (c: any) =>
+                                            !basicInfo.partnerId ||
+                                            c.partner_id.toString() ===
+                                                basicInfo.partnerId,
+                                    )
+                                    .map((c: any) => (
+                                        <option key={c.id} value={c.id}>
+                                            {c.name}
+                                        </option>
+                                    ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -695,27 +739,44 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                             <label className="block text-xs font-medium text-gray-500 mb-1">
                                 총판 담당자
                             </label>
-                            <input
-                                type="text"
-                                list="dist-contact-list"
-                                name="distContactName"
-                                value={basicInfo.distContactName}
+                            <select
+                                name="distContactId"
+                                value={basicInfo.distContactId}
                                 onChange={handleBasicInfoChange}
                                 className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm"
-                            />
+                            >
+                                <option value="">총판 담당자 선택</option>
+                                {loaderData.distContacts.map((d: any) => (
+                                    <option key={d.id} value={d.id}>
+                                        {d.name}
+                                    </option>
+                                ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
                                 AM 이름
                             </label>
-                            <input
-                                type="text"
-                                list="am-list"
-                                name="amName"
-                                value={basicInfo.amName}
+                            <select
+                                name="amId"
+                                value={basicInfo.amId}
                                 onChange={handleBasicInfoChange}
                                 className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm"
-                            />
+                            >
+                                <option value="">AM 선택</option>
+                                {loaderData.ams
+                                    .filter(
+                                        (a: any) =>
+                                            !basicInfo.vendor ||
+                                            a.vendor === basicInfo.vendor,
+                                    )
+                                    .map((a: any) => (
+                                        <option key={a.id} value={a.id}>
+                                            {a.name}{" "}
+                                            {a.vendor ? `(${a.vendor})` : ""}
+                                        </option>
+                                    ))}
+                            </select>
                         </div>
                         <div>
                             <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -915,8 +976,14 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                         <option value="">
                                                             제품 선택
                                                         </option>
-                                                        {loaderData.products.map(
-                                                            (p: any) => (
+                                                        {loaderData.products
+                                                            .filter(
+                                                                (p: any) =>
+                                                                    !basicInfo.vendor ||
+                                                                    p.vendor ===
+                                                                        basicInfo.vendor,
+                                                            )
+                                                            .map((p: any) => (
                                                                 <option
                                                                     key={p.code}
                                                                     value={
@@ -926,10 +993,13 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                                                     {p.code} -{" "}
                                                                     {
                                                                         p.description
-                                                                    }
+                                                                    }{" "}
+                                                                    {p.vendor &&
+                                                                    !basicInfo.vendor
+                                                                        ? `[${p.vendor}]`
+                                                                        : ""}
                                                                 </option>
-                                                            ),
-                                                        )}
+                                                            ))}
                                                     </select>
                                                 </td>
                                                 <td className="p-2">

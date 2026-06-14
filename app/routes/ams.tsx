@@ -6,7 +6,7 @@ import { useTableFeatures } from "./useTableFeatures";
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
-        "SELECT id, name, position, job_type, email, phone, assigned_clients FROM ams",
+        "SELECT id, name, position, job_type, email, phone, assigned_clients, vendor FROM ams",
     );
     const rawAms = stmt.all();
 
@@ -38,6 +38,7 @@ export async function action({ request }: Route.ActionArgs) {
     const phone = (formData.get("phone") as string) || "";
     const assigned_clients_str =
         (formData.get("assigned_clients") as string) || "";
+    const vendor = (formData.get("vendor") as string) || "";
 
     // 콤마로 입력받은 문자열을 다시 JSON 배열 텍스트로 변환
     const clientsArray = assigned_clients_str
@@ -52,8 +53,8 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(`
-                INSERT INTO ams (name, position, job_type, email, phone, assigned_clients) 
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO ams (name, position, job_type, email, phone, assigned_clients, vendor) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             `);
             stmt.run(
                 name,
@@ -62,6 +63,7 @@ export async function action({ request }: Route.ActionArgs) {
                 email,
                 phone,
                 assigned_clients_json,
+                vendor,
             );
             return { success: true, intent: "add" };
         } catch (error) {
@@ -85,7 +87,7 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare(`
                 UPDATE ams 
-                SET name = ?, position = ?, job_type = ?, email = ?, phone = ?, assigned_clients = ? 
+                SET name = ?, position = ?, job_type = ?, email = ?, phone = ?, assigned_clients = ?, vendor = ? 
                 WHERE id = ?
             `);
             stmt.run(
@@ -95,6 +97,7 @@ export async function action({ request }: Route.ActionArgs) {
                 email,
                 phone,
                 assigned_clients_json,
+                vendor,
                 Number(id),
             );
             return { success: true, intent: "edit" };
@@ -140,6 +143,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
         email: "",
         phone: "",
         assigned_clients: "",
+        vendor: "",
     });
 
     const handleEditClick = (am: any) => {
@@ -151,6 +155,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
             email: am.email || "",
             phone: am.phone || "",
             assigned_clients: am.assigned_clients || "",
+            vendor: am.vendor || "",
         });
     };
 
@@ -235,6 +240,20 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                     <input type="hidden" name="intent" value="add" />
                     <div>
                         <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            벤더
+                        </label>
+                        <select
+                            name="vendor"
+                            required
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                            <option value="">벤더 선택</option>
+                            <option value="Broadcom">Broadcom</option>
+                            <option value="Omnissa">Omnissa</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                             AM명
                         </label>
                         <input
@@ -289,7 +308,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                             placeholder="010-0000-0000"
                         />
                     </div>
-                    <div className="md:col-span-2 lg:col-span-2">
+                    <div className="md:col-span-2 lg:col-span-3">
                         <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                             담당고객 (콤마로 구분)
                         </label>
@@ -322,6 +341,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                 <table className="w-full text-left border-collapse">
                     <thead>
                         <tr className="bg-gray-100 dark:bg-gray-700 border-b dark:border-gray-600 text-gray-800 dark:text-gray-200 divide-x divide-gray-200 dark:divide-gray-600">
+                            {renderTh("벤더", "vendor")}
                             {renderTh("AM명", "name")}
                             {renderTh("직급", "position")}
                             {renderTh("구분", "job_type")}
@@ -353,6 +373,28 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                                 >
                                     {isEditing ? (
                                         <>
+                                            <td className="p-3">
+                                                <select
+                                                    className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                    value={editForm.vendor}
+                                                    onChange={(e) =>
+                                                        handleFieldChange(
+                                                            "vendor",
+                                                            e.target.value,
+                                                        )
+                                                    }
+                                                >
+                                                    <option value="">
+                                                        선택
+                                                    </option>
+                                                    <option value="Broadcom">
+                                                        Broadcom
+                                                    </option>
+                                                    <option value="Omnissa">
+                                                        Omnissa
+                                                    </option>
+                                                </select>
+                                            </td>
                                             {[
                                                 "name",
                                                 "position",
@@ -423,6 +465,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                                         </>
                                     ) : (
                                         <>
+                                            <td className="p-4">{am.vendor}</td>
                                             <td className="p-4">{am.name}</td>
                                             <td className="p-4">
                                                 {am.position}

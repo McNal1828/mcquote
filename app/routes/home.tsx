@@ -129,6 +129,12 @@ export async function loader({ request }: Route.LoaderArgs) {
         params.push(createdMonth.padStart(2, "0"));
     }
 
+    const vendor = url.searchParams.get("vendor");
+    if (vendor) {
+        conditions.push("q.vendor = ?");
+        params.push(vendor);
+    }
+
     const whereClause =
         conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -705,25 +711,30 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     const renderTh = (
         label: string,
         columnKey: string,
-        options = { sortable: true, searchable: true },
+        options: {
+            sortable?: boolean;
+            searchable?: boolean;
+            className?: string;
+        } = {},
     ) => {
+        const { sortable = true, searchable = true, className = "" } = options;
         const currentSortKey = searchParams.get("sortKey") || "updated_at";
         const currentSortDir = searchParams.get("sortDir") || "desc";
         const isSorted = currentSortKey === columnKey;
         const filterValue = searchParams.get(columnKey) || "";
 
         return (
-            <th key={columnKey} className="p-3 align-top">
+            <th key={columnKey} className={`p-3 align-top ${className}`}>
                 <div
                     className={`flex items-center justify-between font-semibold select-none mb-2 ${
-                        options.sortable
+                        sortable
                             ? "cursor-pointer group hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                             : ""
                     }`}
-                    onClick={() => options.sortable && handleSort(columnKey)}
+                    onClick={() => sortable && handleSort(columnKey)}
                 >
                     <span>{label}</span>
-                    {options.sortable &&
+                    {sortable &&
                         (isSorted ? (
                             <span className="ml-1 text-blue-500 text-right">
                                 {currentSortDir === "desc" ? "▼" : "▲"}
@@ -734,7 +745,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                             </span>
                         ))}
                 </div>
-                {options.searchable && (
+                {searchable && (
                     <input
                         key={`filter-${columnKey}-${filterValue}`}
                         type="text"
@@ -829,6 +840,25 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                     </select>
                 </div>
 
+                <div className="w-px h-5 bg-gray-300 dark:bg-gray-600 hidden sm:block"></div>
+
+                <div className="flex items-center gap-3">
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
+                        <span className="mr-1">🏷️</span> 벤더 필터
+                    </span>
+                    <select
+                        className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        value={searchParams.get("vendor") || ""}
+                        onChange={(e) =>
+                            handleFilterChange("vendor", e.target.value)
+                        }
+                    >
+                        <option value="">벤더 전체</option>
+                        <option value="Broadcom">Broadcom</option>
+                        <option value="Omnissa">Omnissa</option>
+                    </select>
+                </div>
+
                 {/* 출력하기 버튼 (가장 우측으로 밀기 위해 ml-auto 사용) */}
                 <div className="ml-auto">
                     <button
@@ -850,20 +880,28 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                 {renderTh(
                                     "파트너 담당자",
                                     "partner_contact_name",
+                                    { className: "w-32" },
                                 )}
-                                {renderTh("총판 담당자", "dist_contact_name")}
+                                {renderTh("총판 담당자", "dist_contact_name", {
+                                    className: "w-28",
+                                })}
                                 {renderTh("사업명", "project_name")}
                                 {renderTh("총 공급가", "totalSupplyPrice", {
                                     sortable: false,
                                     searchable: false,
+                                    className: "whitespace-nowrap",
                                 })}
                                 {renderTh("견적날짜", "created_at", {
                                     sortable: true,
                                     searchable: false,
+                                    className:
+                                        "min-w-[110px] whitespace-nowrap",
                                 })}
                                 {renderTh("마지막 수정날짜", "updated_at", {
                                     sortable: true,
                                     searchable: false,
+                                    className:
+                                        "min-w-[140px] whitespace-nowrap",
                                 })}
                             </tr>
                         </thead>

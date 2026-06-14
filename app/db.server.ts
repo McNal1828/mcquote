@@ -15,7 +15,8 @@ db.exec(`
     job_type TEXT, -- 직종
     email TEXT, -- 이메일
     phone TEXT, -- 연락처
-    assigned_clients TEXT -- 담당 고객사들 (JSON 배열 텍스트로 저장)
+    assigned_clients TEXT, -- 담당 고객사들 (JSON 배열 텍스트로 저장)
+    vendor TEXT -- 벤더
   );
 `);
 
@@ -57,7 +58,8 @@ db.exec(`
     code TEXT PRIMARY KEY, -- 제품코드 (고유 식별자)
     description TEXT,
     lpd REAL, -- LP 달러(가격, 소수점이 있을 수 있으므로 REAL 사용)
-    lpw REAL -- LP 원화
+    lpw REAL, -- LP 원화
+    vendor TEXT -- 벤더
   );
 `);
 
@@ -88,6 +90,7 @@ db.exec(`
     note TEXT, -- 비고
     is_ordered INTEGER DEFAULT 0, -- 주문 여부
     is_lost INTEGER DEFAULT 0, -- 실주 여부
+    vendor TEXT, -- 벤더
     
     -- 외래키(Foreign Key) 지정으로 데이터 무결성을 보장합니다.
     FOREIGN KEY (partner_id) REFERENCES partners(id),
@@ -104,7 +107,7 @@ db.transaction(() => {
     };
     if (amCount.count === 0) {
         const insert = db.prepare(
-            "INSERT INTO ams (name, position, job_type, email, phone) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO ams (name, position, job_type, email, phone, vendor) VALUES (?, ?, ?, ?, ?, ?)",
         );
         insert.run(
             "테스트AM",
@@ -112,6 +115,7 @@ db.transaction(() => {
             "영업",
             "st.te@example.com",
             "010-1111-2222",
+            "Broadcom",
         );
     }
 
@@ -146,9 +150,9 @@ db.transaction(() => {
         .get() as { count: number };
     if (productCount.count === 0) {
         const insert = db.prepare(
-            "INSERT INTO products (code, description, lpd, lpw) VALUES (?, ?, ?, ?)",
+            "INSERT INTO products (code, description, lpd, lpw, vendor) VALUES (?, ?, ?, ?, ?)",
         );
-        insert.run("VCF-CLD-TEST", "test license", 1000, 3000000);
+        insert.run("VCF-CLD-TEST", "test license", 1000, 3000000, "Broadcom");
     }
 
     const distContactCount = db
@@ -169,8 +173,8 @@ db.transaction(() => {
             INSERT INTO quotes (
                 client_company, client_contact_name, client_contact_email, client_contact_phone, partner_id, 
                 partner_contact_id, project_name, quote_type, products, created_at, updated_at, 
-                am_id, dist_contact_id, contract_type, deal_flow, expected_quarter, stage, note
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                am_id, dist_contact_id, contract_type, deal_flow, expected_quarter, stage, note, vendor
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         // JSON 형식으로 들어갈 제품 목록 데이터 생성
@@ -235,6 +239,7 @@ db.transaction(() => {
             "FY26Q3",
             2,
             note,
+            "Broadcom",
         );
     }
 })();

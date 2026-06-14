@@ -5,7 +5,9 @@ import type { Route } from "./+types/products";
 import { useTableFeatures } from "./useTableFeatures";
 
 export async function loader({ request }: Route.LoaderArgs) {
-    const stmt = db.prepare("SELECT code, description, lpd, lpw FROM products");
+    const stmt = db.prepare(
+        "SELECT code, description, lpd, lpw, vendor FROM products",
+    );
     const products = stmt.all();
     return { products };
 }
@@ -18,6 +20,7 @@ export async function action({ request }: Route.ActionArgs) {
     const description = formData.get("description");
     const lpd = formData.get("lpd");
     const lpw = formData.get("lpw");
+    const vendor = formData.get("vendor");
 
     if (!code) {
         return { error: "제품 코드가 필요합니다." };
@@ -27,10 +30,10 @@ export async function action({ request }: Route.ActionArgs) {
     if (intent === "add") {
         try {
             const stmt = db.prepare(`
-                INSERT INTO products (code, description, lpd, lpw)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO products (code, description, lpd, lpw, vendor)
+                VALUES (?, ?, ?, ?, ?)
             `);
-            stmt.run(code, description, Number(lpd), Number(lpw));
+            stmt.run(code, description, Number(lpd), Number(lpw), vendor || "");
             return { success: true, intent: "add" };
         } catch (error) {
             return {
@@ -54,10 +57,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare(`
                 UPDATE products
-                SET description = ?, lpd = ?, lpw = ?
+                SET description = ?, lpd = ?, lpw = ?, vendor = ?
                 WHERE code = ?
             `);
-            stmt.run(description, Number(lpd), Number(lpw), code);
+            stmt.run(description, Number(lpd), Number(lpw), vendor || "", code);
             return { success: true, intent: "edit" };
         } catch (error) {
             return {
@@ -102,6 +105,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
     const [editingCode, setEditingCode] = useState<string | null>(null);
     const [editForm, setEditForm] = useState({
         description: "",
+        vendor: "",
         lpd: 0,
         lpw: 0,
     });
@@ -110,6 +114,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
         setEditingCode(product.code);
         setEditForm({
             description: product.description || "",
+            vendor: product.vendor || "",
             lpd: product.lpd || 0,
             lpw: product.lpw || 0,
         });
@@ -122,6 +127,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                 intent: "edit",
                 code,
                 description: editForm.description,
+                vendor: editForm.vendor,
                 lpd: editForm.lpd.toString(),
                 lpw: editForm.lpw.toString(),
             },
@@ -192,10 +198,24 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                 <addFetcher.Form
                     method="post"
                     ref={formRef}
-                    className="grid grid-cols-1 md:grid-cols-5 gap-4 items-end"
+                    className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end"
                 >
                     {/* 폼 제출 시 등록 액션임을 서버에 알리는 숨김 필드 */}
                     <input type="hidden" name="intent" value="add" />
+                    <div>
+                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+                            벤더
+                        </label>
+                        <select
+                            name="vendor"
+                            required
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                            <option value="">벤더 선택</option>
+                            <option value="Broadcom">Broadcom</option>
+                            <option value="Omnissa">Omnissa</option>
+                        </select>
+                    </div>
                     <div>
                         <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
                             제품코드
@@ -265,6 +285,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                 <table className="w-full text-left border-collapse">
                     <thead>
                         <tr className="bg-gray-100 dark:bg-gray-700 border-b dark:border-gray-600 text-gray-800 dark:text-gray-200 divide-x divide-gray-200 dark:divide-gray-600">
+                            {renderTh("벤더", "vendor")}
                             {renderTh("제품코드", "code")}
                             {renderTh("설명", "description")}
                             {renderTh("LP 달러", "lpd")}
@@ -283,9 +304,34 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                                     key={product.code}
                                     className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/50 text-gray-700 dark:text-gray-300 divide-x divide-gray-200 dark:divide-gray-700"
                                 >
-                                    <td className="p-4">{product.code}</td>
                                     {isEditing ? (
                                         <>
+                                            <td className="p-3">
+                                                <select
+                                                    className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                    value={editForm.vendor}
+                                                    onChange={(e) =>
+                                                        setEditForm({
+                                                            ...editForm,
+                                                            vendor: e.target
+                                                                .value,
+                                                        })
+                                                    }
+                                                >
+                                                    <option value="">
+                                                        선택
+                                                    </option>
+                                                    <option value="Broadcom">
+                                                        Broadcom
+                                                    </option>
+                                                    <option value="Omnissa">
+                                                        Omnissa
+                                                    </option>
+                                                </select>
+                                            </td>
+                                            <td className="p-4 bg-gray-50 dark:bg-gray-800/50">
+                                                {product.code}
+                                            </td>
                                             <td className="p-3">
                                                 <input
                                                     type="text"
@@ -373,6 +419,12 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                                         </>
                                     ) : (
                                         <>
+                                            <td className="p-4">
+                                                {product.vendor}
+                                            </td>
+                                            <td className="p-4">
+                                                {product.code}
+                                            </td>
                                             <td className="p-4">
                                                 {product.description}
                                             </td>
