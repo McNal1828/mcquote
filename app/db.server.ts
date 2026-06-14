@@ -6,6 +6,11 @@ const db = new Database("appdata.db");
 // 외래키(Foreign Key) 제약 조건을 활성화합니다. (SQLite는 기본적으로 꺼져있으므로 필수입니다)
 db.pragma("foreign_keys = ON");
 
+// 동시성(Concurrency) 성능 향상을 위해 WAL 모드를 활성화합니다. (읽기/쓰기 동시 접근 성능 대폭 향상)
+// db.pragma("journal_mode = WAL");
+// WAL 모드를 끄고 SQLite의 기본 모드(DELETE)로 되돌립니다.
+db.pragma("journal_mode = DELETE");
+
 // 1. AM 테이블 생성
 db.exec(`
   CREATE TABLE IF NOT EXISTS ams (

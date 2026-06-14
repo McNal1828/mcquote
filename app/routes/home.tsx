@@ -1,4 +1,4 @@
-import { useState, Fragment } from "react";
+import { useState, Fragment, useEffect } from "react";
 import { useFetcher, useSearchParams } from "react-router";
 import type { Route } from "./+types/home";
 import db from "../db.server";
@@ -13,8 +13,8 @@ export const links: Route.LinksFunction = () => [
 
 export function headers({ loaderHeaders }: Route.HeadersArgs) {
     return {
-        // 개발 중에는 캐시를 비활성화하기 위해 주석 처리합니다.
-        // "Cache-Control": "max-age=300",
+        // 브라우저가 10초 동안은 무조건 캐시를 사용하고, 그 이후에는 캐시를 보여주되 서버에서 최신 데이터를 백그라운드로 가져옵니다.
+        "Cache-Control": "max-age=10, stale-while-revalidate=50",
     };
 }
 
@@ -36,6 +36,7 @@ export async function action({ request }: Route.ActionArgs) {
         projectName,
         isOrdered,
         isLost,
+        originalUpdatedAt,
     } = data;
 
     if (intent === "delete") {
@@ -55,9 +56,9 @@ export async function action({ request }: Route.ActionArgs) {
         const stmt = db.prepare(`
             UPDATE quotes 
             SET products = ?, quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND updated_at = ?
         `);
-        stmt.run(
+        const info = stmt.run(
             JSON.stringify(products),
             quote_type,
             JSON.stringify(notes),
@@ -66,8 +67,16 @@ export async function action({ request }: Route.ActionArgs) {
             isLost,
             now,
             quoteId,
+            originalUpdatedAt,
         );
-        return { success: true };
+
+        if (info.changes === 0) {
+            return {
+                error: "다른 사용자가 방금 이 견적을 수정했거나 삭제했습니다. 덮어쓰기를 방지하기 위해 저장이 취소되었습니다. 새로고침 후 다시 시도해주세요.",
+            };
+        }
+
+        return { success: true, intent: "edit" };
     } catch (error) {
         return { error: "업데이트 중 오류가 발생했습니다." };
     }
@@ -289,6 +298,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     const [editProjectName, setEditProjectName] = useState<string>("");
     const [editIsOrdered, setEditIsOrdered] = useState<number>(0);
     const [editIsLost, setEditIsLost] = useState<number>(0);
+    const [editOriginalUpdatedAt, setEditOriginalUpdatedAt] = useState<
+        number | null
+    >(null);
 
     // 사이드바 필터 옵션을 위한 연도, 월 데이터 생성
     const currentYear = new Date().getFullYear();
@@ -296,6 +308,18 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         (currentYear - i).toString(),
     );
     const months = Array.from({ length: 12 }, (_, i) => (i + 1).toString());
+
+    // 서버 요청 완료 후 에러가 있으면 경고를, 성공했으면 편집 창을 닫도록 처리합니다.
+    useEffect(() => {
+        if (fetcher.state === "idle" && fetcher.data) {
+            if (fetcher.data.error) {
+                alert(fetcher.data.error);
+            } else if (fetcher.data.success && fetcher.data.intent === "edit") {
+                setEditingQuoteId(null);
+                setEditOriginalUpdatedAt(null);
+            }
+        }
+    }, [fetcher.state, fetcher.data]);
 
     // 견적 수정 시작
     const handleEditClick = (quote: any) => {
@@ -315,6 +339,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditProjectName(quote.project_name || "");
         setEditIsOrdered(quote.is_ordered || 0);
         setEditIsLost(quote.is_lost || 0);
+        setEditOriginalUpdatedAt(quote.updated_at);
     };
 
     // 견적 수정 취소
@@ -325,6 +350,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditProjectName("");
         setEditIsOrdered(0);
         setEditIsLost(0);
+        setEditOriginalUpdatedAt(null);
     };
 
     // 다운로드 및 등록(수정) 제출 직전에 데이터를 재계산하여 정제하는 공통 함수
@@ -422,10 +448,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 projectName: editProjectName,
                 isOrdered: editIsOrdered,
                 isLost: editIsLost,
+                originalUpdatedAt: editOriginalUpdatedAt,
             },
             { method: "post", encType: "application/json" },
         );
-        setEditingQuoteId(null);
     };
 
     // 견적 삭제 핸들러

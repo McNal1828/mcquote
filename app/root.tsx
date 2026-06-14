@@ -199,6 +199,7 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
                                 <li key={item.path}>
                                     <NavLink
                                         to={item.path}
+                                        prefetch="intent"
                                         className={({ isActive }) =>
                                             isActive
                                                 ? "font-bold text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400 pb-4"
