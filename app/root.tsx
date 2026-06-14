@@ -49,6 +49,7 @@ const navItems = [
     { path: "/partners", label: "파트너사 목록" },
     { path: "/contacts", label: "파트너사 담당자 목록" },
     { path: "/dist", label: "총판 담당자 목록" },
+    { path: "/stats", label: "통계" },
 ];
 
 // 1. 보안이 강화된 HTTP-Only 쿠키 설정

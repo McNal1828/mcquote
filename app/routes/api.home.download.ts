@@ -82,6 +82,8 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.client_company,
             q.project_name,
             dc.name as dist_contact_name,
+            q.vendor,
+            a.name as am_name,
             q.created_at,
             q.updated_at,
             q.is_ordered,
@@ -91,6 +93,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
         LEFT JOIN dist_contacts dc ON q.dist_contact_id = dc.id
+        LEFT JOIN ams a ON q.am_id = a.id
         ${whereClause}
         ORDER BY ${dbSortKey} ${sortDir}
     `);
@@ -107,6 +110,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         { header: "파트너사 담당자 이름", key: "partner_contact", width: 22 },
         { header: "고객사", key: "client", width: 20 },
         { header: "사업명", key: "project", width: 35 },
+        { header: "벤더", key: "vendor", width: 15 },
+        { header: "벤더 담당자", key: "am_name", width: 18 },
         { header: "총판 담당자 이름", key: "dist_contact", width: 20 },
         { header: "견적날짜", key: "created_at", width: 15 },
         { header: "마지막 수정날짜", key: "updated_at", width: 15 },
@@ -150,6 +155,8 @@ export async function loader({ request }: Route.LoaderArgs) {
             partner_contact: row.partner_contact_name || "",
             client: row.client_company || "",
             project: row.project_name || "",
+            vendor: row.vendor || "",
+            am_name: row.am_name || "",
             dist_contact: row.dist_contact_name || "",
             created_at: new Date(row.created_at).toLocaleDateString("ko-KR"),
             updated_at: new Date(row.updated_at).toLocaleDateString("ko-KR"),
@@ -160,7 +167,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
         // 행 내의 각 셀 세로 중앙 정렬 처리, '제품상세' 셀은 줄바꿈(wrapText) 적용
         addedRow.eachCell((cell, colNumber) => {
-            if (colNumber === 10) {
+            if (colNumber === 12) {
                 // 제품상세 컬럼
                 cell.alignment = { vertical: "middle", wrapText: true };
             } else {

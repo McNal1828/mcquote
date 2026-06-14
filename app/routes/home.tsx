@@ -188,7 +188,8 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.contract_type,
             q.quote_type,
             q.is_ordered,
-            q.is_lost
+            q.is_lost,
+            q.vendor
         FROM quotes q
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
@@ -256,6 +257,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             quote_type: row.quote_type, // PPC(0) or DC/MARGIN(1)
             is_ordered: row.is_ordered,
             is_lost: row.is_lost,
+            vendor: row.vendor,
             created_at: row.created_at,
             createdAtDate: new Date(row.created_at).toLocaleDateString("ko-KR"),
             updated_at: row.updated_at, // 정렬 처리를 위한 원본 데이터 보존
@@ -265,7 +267,7 @@ export async function loader({ request }: Route.LoaderArgs) {
 
     // 제품 자동완성 및 정보 불러오기를 위한 마스터 데이터
     const productsStmt = db.prepare(
-        "SELECT code, description, lpd, lpw FROM products",
+        "SELECT code, description, lpd, lpw, vendor FROM products",
     );
     const masterProducts = productsStmt.all();
 
@@ -1402,28 +1404,41 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                                     제품
                                                                                                     선택
                                                                                                 </option>
-                                                                                                {loaderData.masterProducts.map(
-                                                                                                    (
-                                                                                                        p: any,
-                                                                                                    ) => (
-                                                                                                        <option
-                                                                                                            key={
-                                                                                                                p.code
-                                                                                                            }
-                                                                                                            value={
-                                                                                                                p.code
-                                                                                                            }
-                                                                                                        >
-                                                                                                            {
-                                                                                                                p.code
-                                                                                                            }{" "}
-                                                                                                            -{" "}
-                                                                                                            {
-                                                                                                                p.description
-                                                                                                            }
-                                                                                                        </option>
-                                                                                                    ),
-                                                                                                )}
+                                                                                                {loaderData.masterProducts
+                                                                                                    .filter(
+                                                                                                        (
+                                                                                                            p: any,
+                                                                                                        ) =>
+                                                                                                            !quote.vendor ||
+                                                                                                            p.vendor ===
+                                                                                                                quote.vendor,
+                                                                                                    )
+                                                                                                    .map(
+                                                                                                        (
+                                                                                                            p: any,
+                                                                                                        ) => (
+                                                                                                            <option
+                                                                                                                key={
+                                                                                                                    p.code
+                                                                                                                }
+                                                                                                                value={
+                                                                                                                    p.code
+                                                                                                                }
+                                                                                                            >
+                                                                                                                {
+                                                                                                                    p.code
+                                                                                                                }{" "}
+                                                                                                                -{" "}
+                                                                                                                {
+                                                                                                                    p.description
+                                                                                                                }
+                                                                                                                {p.vendor &&
+                                                                                                                !quote.vendor
+                                                                                                                    ? ` [${p.vendor}]`
+                                                                                                                    : ""}
+                                                                                                            </option>
+                                                                                                        ),
+                                                                                                    )}
                                                                                             </select>
                                                                                         ) : (
                                                                                             <span className="px-2">
