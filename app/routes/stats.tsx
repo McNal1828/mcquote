@@ -166,11 +166,26 @@ export async function loader({ request }: Route.LoaderArgs) {
     rawQuotes.forEach((q) => {
         let revenue = 0;
         try {
-            const prods = JSON.parse(q.products || "[]");
-            revenue = prods.reduce(
-                (sum: number, p: any) => sum + (Number(p.공급가) || 0),
-                0,
-            );
+            const parsed = JSON.parse(q.products || "[]");
+            if (Array.isArray(parsed)) {
+                revenue = parsed.reduce(
+                    (sum: number, p: any) => sum + (Number(p.공급가) || 0),
+                    0,
+                );
+            } else {
+                revenue = Object.values(parsed).reduce(
+                    (sum: number, groupProds: any) =>
+                        sum +
+                        (Array.isArray(groupProds)
+                            ? groupProds.reduce(
+                                  (gSum: number, p: any) =>
+                                      gSum + (Number(p.공급가) || 0),
+                                  0,
+                              )
+                            : 0),
+                    0,
+                );
+            }
         } catch (e) {}
 
         // 오더된 건들(is_ordered === 1)에 대해서만 총 공급가 및 매출 추이 계산
@@ -227,13 +242,13 @@ export default function Stats({ loaderData }: Route.ComponentProps) {
         startDate,
         endDate,
         partnerStats,
-        contactsByPartner,
         distContactStats,
         vendorStats,
-        amsByVendor,
         summary,
         monthlyTrend,
     } = loaderData;
+    const contactsByPartner: Record<string | number, any> = loaderData.contactsByPartner || {};
+    const amsByVendor: Record<string, any> = loaderData.amsByVendor || {};
     const [expandedPartners, setExpandedPartners] = useState<Set<number>>(
         new Set(),
     );

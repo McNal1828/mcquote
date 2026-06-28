@@ -136,16 +136,35 @@ export async function loader({ request }: Route.LoaderArgs) {
         // 제품 상세 JSON 파싱 및 포맷팅 (리스트 형식 텍스트화)
         let productsText = "";
         try {
-            const productsArray = JSON.parse(row.products || "[]");
-            productsText = productsArray
-                .map((p: any) => {
-                    const code = p.제품코드 || "-";
-                    const qty = p.수량 || 0;
-                    const period = p.기간 || 0;
-                    const supply = Number(p.공급가) || 0;
-                    return `• ${code} / ${qty}ea / ${period}Y / ₩${supply.toLocaleString()}`;
-                })
-                .join("\n");
+            const parsed = JSON.parse(row.products || "[]");
+            if (Array.isArray(parsed)) {
+                productsText = parsed
+                    .map((p: any) => {
+                        const code = p.제품코드 || "-";
+                        const qty = p.수량 || 0;
+                        const period = p.기간 || 0;
+                        const supply = Number(p.공급가) || 0;
+                        return `• ${code} / ${qty}ea / ${period}Y / ₩${supply.toLocaleString()}`;
+                    })
+                    .join("\n");
+            } else {
+                const parts: string[] = [];
+                for (const [groupName, prods] of Object.entries(parsed)) {
+                    parts.push(`[${groupName}]`);
+                    if (Array.isArray(prods)) {
+                        prods.forEach((p: any) => {
+                            const code = p.제품코드 || "-";
+                            const qty = p.수량 || 0;
+                            const period = p.기간 || 0;
+                            const supply = Number(p.공급가) || 0;
+                            parts.push(
+                                `  • ${code} / ${qty}ea / ${period}Y / ₩${supply.toLocaleString()}`,
+                            );
+                        });
+                    }
+                }
+                productsText = parts.join("\n");
+            }
         } catch (e) {
             productsText = "제품 정보 없음";
         }

@@ -12,4 +12,5 @@ export default [
     route("contacts", "routes/contacts.tsx"),
     route("dist", "routes/dist.tsx"),
     route("stats", "routes/stats.tsx"),
+    route("history/:id", "routes/history.tsx"),
 ] satisfies RouteConfig;
