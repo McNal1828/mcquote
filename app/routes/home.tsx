@@ -1,7 +1,7 @@
 import { useState, Fragment, useEffect, useRef } from "react";
 import { useFetcher, useSearchParams, Link } from "react-router";
-import { getFinalProducts, calculateReverseDCWon, normalizeProducts } from "~/utils/calculator";
-import DetailedCostTable from "~/components/DetailedCostTable";
+import crypto from "crypto";
+import { getFinalProducts } from "~/utils/calculator";
 import type { Route } from "./+types/home";
 import db from "../db.server";
 import {
@@ -25,6 +25,28 @@ import {
     ChevronUp,
     ChevronsUpDown,
 } from "lucide-react";
+
+// 빈 제품 행 객체를 생성하는 팩토리 함수
+const createEmptyProductRow = () => ({
+    제품코드: "",
+    제품설명: "",
+    lpd: 0,
+    lpw: 0,
+    수량: 1,
+    기간: 1,
+    DC달러: 0,
+    환율: 0,
+    DC원화: 0,
+    공급가: 0,
+    margin: 0, // DTO 및 DB와 동기화된 기본 필드 명칭으로 맞춤 (마진)
+    공급가_원화: 0,
+    마진: 0,
+    년차: 1,
+    원화PPC: 0,
+    마진율: "0.0",
+    매출월: 1,
+    stage: 10,
+});
 
 export const handle = {
     breadcrumb: () => "홈페이지",
@@ -60,6 +82,8 @@ export async function action({ request }: Route.ActionArgs) {
         isOrdered,
         isLost,
         originalUpdatedAt,
+        defaultGroup,
+        stage,
     } = data;
 
     if (intent === "delete") {
@@ -90,40 +114,234 @@ export async function action({ request }: Route.ActionArgs) {
             }
         }
 
-        // 새로운 이력 추가
-        historyList.push({
-            [now]: products,
-        });
+        // 제품 변경 여부 확인 (제품의 모든 속성 변화를 감지)
+        const normalizeProductsForComparison = (prods: any): any[] => {
+            const list: any[] = [];
+            const processItem = (p: any) => ({
+                제품코드: p.제품코드 || "",
+                제품설명: p.제품설명 || "",
+                lpd: Number(p.lpd) || 0,
+                lpw: Number(p.lpw) || 0,
+                수량: Number(p.수량) || 0,
+                기간: Number(p.기간) || 0,
+                DC달러: Number(p.DC달러) || 0,
+                환율: Number(p.환율) || 0,
+                DC원화: Number(p.DC원화) || 0,
+                공급가: Number(p.공급가) || 0,
+                마진: Number(p.마진) || 0,
+                마진율: String(p.마진율 || "0.0"),
+                년차: Number(p.년차 !== undefined ? p.년차 : p.year) || 0,
+                원화PPC: Number(p.원화PPC) || 0,
+                매출월: Number(p.매출월 !== undefined ? p.매출월 : p.month) || 0,
+                stage: Number(p.stage) || 0,
+            });
+
+            if (Array.isArray(prods)) {
+                prods.forEach((p: any) => list.push(processItem(p)));
+            } else if (typeof prods === "object" && prods !== null) {
+                const sortedKeys = Object.keys(prods).sort();
+                for (const key of sortedKeys) {
+                    const groupProds = prods[key];
+                    if (Array.isArray(groupProds)) {
+                        groupProds.forEach((p: any) => {
+                            list.push({
+                                groupName: key,
+                                ...processItem(p),
+                            });
+                        });
+                    }
+                }
+            }
+            return list;
+        };
+
+        let productsChanged = true;
+        if (historyList.length > 0) {
+            const lastEntry = historyList[historyList.length - 1];
+            const lastTimestamp = Object.keys(lastEntry)[0];
+            const lastProducts = lastEntry[lastTimestamp];
+            const prevNormalized = normalizeProductsForComparison(lastProducts);
+            const newNormalized = normalizeProductsForComparison(products);
+            productsChanged = JSON.stringify(prevNormalized) !== JSON.stringify(newNormalized);
+        }
+
+        // 제품 변경이 있을 때만 이력 추가
+        if (productsChanged) {
+            historyList.push({ [now]: products });
+        }
         const products_history = JSON.stringify(historyList);
 
-        const stmt = db.prepare(`
-            UPDATE quotes 
-            SET products = ?, quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?, products_history = ?
-            WHERE id = ? AND updated_at = ?
-        `);
-        const info = stmt.run(
-            JSON.stringify(products),
-            quote_type,
-            JSON.stringify(notes),
-            projectName,
-            isOrdered,
-            isLost,
-            now,
-            products_history,
-            quoteId,
-            originalUpdatedAt,
-        );
+        db.transaction(() => {
+            const stmt = db.prepare(`
+                UPDATE quotes 
+                SET quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?, products_history = ?, stage = ?
+                WHERE id = ? AND updated_at = ?
+            `);
+            const info = stmt.run(
+                quote_type,
+                JSON.stringify(notes),
+                projectName,
+                isOrdered,
+                isLost,
+                now,
+                products_history,
+                stage !== undefined && stage !== null ? Number(stage) : 10,
+                quoteId,
+                originalUpdatedAt,
+            );
 
-        if (info.changes === 0) {
+            if (info.changes === 0) {
+                throw new Error("CONCURRENCY_ERROR");
+            }
+
+            // 기존 그룹 삭제 (ON DELETE CASCADE로 lines 자동 삭제됨)
+            db.prepare("DELETE FROM quote_groups WHERE quote_id = ?").run(Number(quoteId));
+
+            const insertGroup = db.prepare(`
+                INSERT INTO quote_groups (quote_id, name, uuid, "default") 
+                VALUES (?, ?, ?, ?)
+            `);
+
+            const insertLine = db.prepare(`
+                INSERT INTO quote_lines (
+                    group_id, line_number, product_id, description, lpd, lpw, 
+                    quantity, period, dc_usd, exchange_rate, dc_krw, 
+                    supply_price, margin, margin_rate, year, krw_ppc,
+                    month, stage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+
+            const selectProduct = db.prepare("SELECT id FROM products WHERE code = ?");
+
+            const groups = Array.isArray(products) ? { "원가표1": products } : products;
+
+            for (const [groupName, prods] of Object.entries(groups)) {
+                if (!Array.isArray(prods)) continue;
+
+                const groupUuid = crypto.randomUUID();
+                const isDefault = groupName === defaultGroup ? 1 : 0;
+                const groupInfo = insertGroup.run(Number(quoteId), groupName, groupUuid, isDefault);
+                const groupId = groupInfo.lastInsertRowid;
+
+                prods.forEach((line: any, index: number) => {
+                    const productCode = line.제품코드;
+                    const productRow = selectProduct.get(productCode) as { id: number } | undefined;
+                    const productId = productRow ? productRow.id : null;
+
+                    insertLine.run(
+                        groupId,
+                        index + 1,
+                        productId,
+                        line.제품설명 || "",
+                        Number(line.lpd) || 0,
+                        Number(line.lpw) || 0,
+                        Number(line.수량) || 1,
+                        Number(line.기간) || 1,
+                        Number(line.DC달러) || 0,
+                        Number(line.환율) || 0,
+                        Number(line.DC원화) || 0,
+                        Number(line.공급가) || 0,
+                        Number(line.마진) || 0,
+                        parseFloat(line.마진율) || 0,
+                        Number(line.년차) || 1,
+                        Number(line.원화PPC) || 0,
+                        Number(line.매출월) || 1,
+                        Number(line.stage) || 10
+                    );
+                });
+            }
+        })();
+
+        return { success: true, intent: "edit" };
+    } catch (error: any) {
+        if (error.message === "CONCURRENCY_ERROR") {
             return {
                 error: "다른 사용자가 방금 이 견적을 수정했거나 삭제했습니다. 덮어쓰기를 방지하기 위해 저장이 취소되었습니다. 새로고침 후 다시 시도해주세요.",
             };
         }
-
-        return { success: true, intent: "edit" };
-    } catch (error) {
+        console.error("업데이트 에러:", error);
         return { error: "업데이트 중 오류가 발생했습니다." };
     }
+}
+
+// 모든 견적의 제품 데이터를 한 번의 배치 쿼리로 조회하는 함수 (N+1 최적화)
+function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, any[]>> {
+    if (quoteIds.length === 0) return {};
+
+    const placeholders = quoteIds.map(() => "?").join(",");
+
+    // 1. 한 번의 쿼리로 모든 그룹 조회
+    const groups = db.prepare(`
+        SELECT id, quote_id, name, "default" 
+        FROM quote_groups 
+        WHERE quote_id IN (${placeholders})
+    `).all(...quoteIds) as any[];
+
+    if (groups.length === 0) {
+        const empty: Record<number, Record<string, any[]>> = {};
+        quoteIds.forEach(id => { empty[id] = {}; });
+        return empty;
+    }
+
+    const groupIds = groups.map((g: any) => g.id);
+    const groupPlaceholders = groupIds.map(() => "?").join(",");
+
+    // 2. 한 번의 쿼리로 모든 라인 조회
+    const lines = db.prepare(`
+        SELECT 
+            l.id as line_id,
+            l.group_id,
+            l.line_number,
+            p.code as 제품코드,
+            p.id as product_id,
+            l.description as 제품설명,
+            l.lpd,
+            l.lpw,
+            l.quantity as 수량,
+            l.period as 기간,
+            l.dc_usd as DC달러,
+            l.exchange_rate as 환율,
+            l.dc_krw as DC원화,
+            l.supply_price as 공급가,
+            l.margin as 마진,
+            l.margin_rate as 마진율,
+            l.year as 년차,
+            l.krw_ppc as 원화PPC,
+            l.month as 매출월,
+            l.stage
+        FROM quote_lines l
+        LEFT JOIN products p ON l.product_id = p.id
+        WHERE l.group_id IN (${groupPlaceholders})
+        ORDER BY l.line_number ASC
+    `).all(...groupIds) as any[];
+
+    // 3. 그룹 ID -> 그룹 데이터 매핑
+    const groupMap = new Map<number, { quote_id: number; name: string; default: number }>();
+    groups.forEach((g: any) => groupMap.set(g.id, g));
+
+    // 4. 그룹 ID -> 라인 목록 매핑
+    const linesByGroup = new Map<number, any[]>();
+    lines.forEach((line: any) => {
+        if (!linesByGroup.has(line.group_id)) {
+            linesByGroup.set(line.group_id, []);
+        }
+        linesByGroup.get(line.group_id)!.push(line);
+    });
+
+    // 5. 견적 ID -> { "그룹명": [...라인] } 구조로 조립
+    const result: Record<number, Record<string, any[]>> = {};
+    quoteIds.forEach(id => { result[id] = {}; });
+
+    groups.forEach((group: any) => {
+        const groupLines = linesByGroup.get(group.id) || [];
+        const linesWithDefault = groupLines.map((line: any) => ({
+            ...line,
+            group_default: group.default
+        }));
+        result[group.quote_id][group.name] = linesWithDefault;
+    });
+
+    return result;
 }
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -183,9 +401,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
 
     const vendor = url.searchParams.get("vendor");
-    if (vendor) {
-        conditions.push("q.vendor = ?");
-        params.push(vendor);
+    if (vendor === "none") {
+        conditions.push("1 = 0");
+    } else if (vendor) {
+        const selected = vendor.split(",");
+        if (selected.length > 0) {
+            const placeholders = selected.map(() => "?").join(",");
+            conditions.push(`q.id IN (SELECT quote_id FROM quote_vendors WHERE vendor IN (${placeholders}))`);
+            selected.forEach(v => params.push(v));
+        }
     }
 
     const whereClause =
@@ -216,7 +440,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     };
     const dbSortKey = sortMap[sortKey] || "q.updated_at";
 
-    // 4. 페이지네이션이 적용된 실제 데이터 가져오기
+    // 4. 페이지네이션이 적용된 실제 데이터 가져오기 (공급가 합계를 서브쿼리로 효율적 처리)
     const stmt = db.prepare(`
         SELECT 
             q.id,
@@ -230,19 +454,21 @@ export async function loader({ request }: Route.LoaderArgs) {
             pc.phone as partner_contact_phone,
             dc.name as dist_contact_name,
             q.project_name,
-            q.products,
             q.created_at,
             q.updated_at,
             q.stage,
             q.note,
             a.name as am_name,
             q.deal_flow,
-            q.expected_quarter,
             q.contract_type,
             q.quote_type,
             q.is_ordered,
             q.is_lost,
-            q.vendor
+            (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendor,
+            (SELECT IFNULL(SUM(l.supply_price), 0)
+             FROM quote_groups g
+             JOIN quote_lines l ON g.id = l.group_id
+             WHERE g.quote_id = q.id AND g."default" = 1) as total_supply_price
         FROM quotes q
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
@@ -255,40 +481,17 @@ export async function loader({ request }: Route.LoaderArgs) {
 
     const rawQuotes = stmt.all(...params, pageSize, offset) as any[];
 
+    // 배치 쿼리로 모든 견적의 제품 데이터를 한 번에 조회 (N+1 최적화)
+    const quoteIds = rawQuotes.map((row: any) => row.id);
+    const allProducts = getAllQuoteProducts(quoteIds);
+
     // 화면에 보여주기 좋게 데이터를 가공합니다.
     const quotes = rawQuotes.map((row) => {
-        let totalSupplyPrice = 0;
-        let productsList = [];
         let noteList = [];
         let dealFlowList = [];
 
-        // JSON 형식인 제품 정보에서 공급가의 합계를 구합니다.
-        try {
-            const parsed = JSON.parse(row.products || "[]");
-            if (Array.isArray(parsed)) {
-                productsList = parsed;
-                totalSupplyPrice = productsList.reduce(
-                    (sum: number, product: any) => sum + (product.공급가 || 0),
-                    0,
-                );
-            } else {
-                productsList = parsed;
-                totalSupplyPrice = Object.values(parsed).reduce(
-                    (sum: number, groupProds: any) =>
-                        sum +
-                        (Array.isArray(groupProds)
-                            ? groupProds.reduce(
-                                  (gSum: number, p: any) =>
-                                      gSum + (Number(p.공급가) || 0),
-                                  0,
-                              )
-                            : 0),
-                    0,
-                );
-            }
-        } catch (e) {
-            console.error("제품 정보 JSON 파싱 실패:", e);
-        }
+        // 배치로 조회된 제품 데이터 사용
+        const productsObj = allProducts[row.id] || {};
 
         // 비고 데이터를 JSON 배열로 파싱합니다.
         try {
@@ -317,12 +520,11 @@ export async function loader({ request }: Route.LoaderArgs) {
             dist_contact_name: row.dist_contact_name,
             project_name: row.project_name,
             stage: row.stage,
-            totalSupplyPrice, // 계산된 총 공급가
-            productsList, // 펼쳤을 때 보여줄 제품 목록 원본 데이터
-            noteList, // 펼쳤을 때 역순으로 보여줄 비고 리스트
+            totalSupplyPrice: row.total_supply_price, // SQL에서 계산된 공급가
+            productsList: productsObj, // 배치로 조회된 제품 목록
+            noteList,
             am_name: row.am_name,
-            dealFlowList, // 화살표로 연결하여 보여줄 deal flow 리스트
-            expected_quarter: row.expected_quarter,
+            dealFlowList,
             contract_type: row.contract_type,
             quote_type: row.quote_type, // PPC(0) or DC/MARGIN(1)
             is_ordered: row.is_ordered,
@@ -330,14 +532,14 @@ export async function loader({ request }: Route.LoaderArgs) {
             vendor: row.vendor,
             created_at: row.created_at,
             createdAtDate: new Date(row.created_at).toLocaleDateString("ko-KR"),
-            updated_at: row.updated_at, // 정렬 처리를 위한 원본 데이터 보존
-            updatedAtDate: new Date(row.updated_at).toLocaleDateString("ko-KR"), // 타임스탬프를 YYYY. MM. DD. 형식으로 변환
+            updated_at: row.updated_at,
+            updatedAtDate: new Date(row.updated_at).toLocaleDateString("ko-KR"),
         };
     });
 
     // 제품 자동완성 및 정보 불러오기를 위한 마스터 데이터
     const productsStmt = db.prepare(
-        "SELECT code, description, lpd, lpw, vendor FROM products",
+        "SELECT id, code, description, lpd, lpw, vendor, available FROM products",
     );
     const masterProducts = productsStmt.all();
 
@@ -394,9 +596,53 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     const [editProjectName, setEditProjectName] = useState<string>("");
     const [editIsOrdered, setEditIsOrdered] = useState<number>(0);
     const [editIsLost, setEditIsLost] = useState<number>(0);
+    const [editStage, setEditStage] = useState<number>(10);
     const [editOriginalUpdatedAt, setEditOriginalUpdatedAt] = useState<
         number | null
     >(null);
+    const [editDefaultGroup, setEditDefaultGroup] = useState<string>("");
+
+    // 전체 단계와 제품라인 일괄 수정 동기화를 위한 변수 및 함수
+    const prevStageValRef = useRef<number>(10);
+    const updateAllProductsStage = (newStage: number) => {
+        let hasHigher = false;
+        for (const [groupName, prods] of Object.entries(editProducts)) {
+            if (Array.isArray(prods)) {
+                for (const p of prods) {
+                    const pStage = p.stage !== undefined ? p.stage : 10;
+                    if (pStage > newStage) {
+                        hasHigher = true;
+                        break;
+                    }
+                }
+            }
+            if (hasHigher) break;
+        }
+
+        if (hasHigher) {
+            const confirmChange = window.confirm(
+                "단계가 낮아지는 매출년도가 있습니다. 일괄 수정을 진행하시겠습니까?"
+            );
+            if (!confirmChange) {
+                return false;
+            }
+        }
+
+        setEditProducts((prev) => {
+            const next = { ...prev };
+            for (const groupName of Object.keys(next)) {
+                const prods = next[groupName];
+                if (Array.isArray(prods)) {
+                    next[groupName] = prods.map((p) => ({
+                        ...p,
+                        stage: newStage,
+                    }));
+                }
+            }
+            return next;
+        });
+        return true;
+    };
 
     // 사이드바 필터 옵션을 위한 연도, 월 데이터 생성
     const currentYear = new Date().getFullYear();
@@ -463,7 +709,22 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditProjectName(quote.project_name || "");
         setEditIsOrdered(quote.is_ordered || 0);
         setEditIsLost(quote.is_lost || 0);
+        setEditStage(quote.stage !== undefined && quote.stage !== null ? quote.stage : 10);
         setEditOriginalUpdatedAt(quote.updated_at);
+
+        // Find initial default group
+        let initialDefault = "";
+        for (const [groupName, prods] of Object.entries(initialProducts)) {
+            if (Array.isArray(prods) && prods.length > 0 && prods[0].group_default === 1) {
+                initialDefault = groupName;
+                break;
+            }
+        }
+        if (!initialDefault) {
+            const keys = Object.keys(initialProducts);
+            if (keys.length > 0) initialDefault = keys[0];
+        }
+        setEditDefaultGroup(initialDefault);
     };
 
     // 견적 수정 취소
@@ -474,96 +735,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditProjectName("");
         setEditIsOrdered(0);
         setEditIsLost(0);
+        setEditStage(10);
         setEditOriginalUpdatedAt(null);
+        setEditDefaultGroup("");
     };
 
-    // 다운로드 및 등록(수정) 제출 직전에 데이터를 재계산하여 정제하는 공통 함수
-    const getFinalProducts = (
-        productsToProcess: any[] | Record<string, any[]>,
-        currentMode: string = calcMode,
-    ): any => {
-        if (Array.isArray(productsToProcess)) {
-            return productsToProcess.map((prod) => {
-                const lpd = Number(prod.lpd) || 0;
-                const lpw = Number(prod.lpw) || 0;
-                const qty = Number(prod.수량) || 0;
-                const period = Number(prod.기간) || 0;
-                const dcDollar = Number(prod.DC달러) || 0;
-                const exchangeRate = Number(prod.환율) || 0;
-                let dcWon = Number(prod.DC원화) || 0;
 
-                const dollarPpc = lpd * (1 - dcDollar / 100);
-                const dollarCost = lpd * qty * period;
-                const dollarNet = dollarPpc * qty * period;
-                const wonNet = dollarNet * exchangeRate;
-
-                const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
-                let supplyPrice = 0;
-
-                if (currentMode === "PPC" && prod.원화PPC !== undefined) {
-                    supplyPrice = Number(prod.원화PPC) * qty * period;
-                } else if (currentMode === "MARGIN" && prod.마진율 !== undefined) {
-                    const inputMarginPercent = Number(prod.마진율);
-                    let tempSupply = 0;
-                    if (inputMarginPercent < 100) {
-                        tempSupply =
-                            Math.round(
-                                wonNet / (1 - inputMarginPercent / 100) / 1000,
-                            ) * 1000;
-                    }
-                    const baseTotalLpw = lpw * qty * period;
-                    if (baseTotalLpw > 0) {
-                        const rawDcWon = (1 - tempSupply / baseTotalLpw) * 100;
-                        dcWon = Math.trunc(rawDcWon * 100) / 100;
-                    }
-
-                    // 마진% 기준일 경우, 역산된 DC원화를 바탕으로 공급가를 순방향으로 다시 도출
-                    const discountedUnitLpw =
-                        Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
-                    supplyPrice = discountedUnitLpw * qty;
-                } else {
-                    const discountedUnitLpw =
-                        Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
-                    supplyPrice = discountedUnitLpw * qty;
-                }
-
-                const wonPpc = qty * period > 0 ? supplyPrice / (qty * period) : 0;
-                const margin = supplyPrice - wonNet;
-                const marginPercent = supplyPrice
-                    ? ((margin / supplyPrice) * 100).toFixed(1)
-                    : "0.0";
-
-                return {
-                    ...prod,
-                    DC원화: dcWon, // 재계산된 DC원화 저장
-                    달러PPC: dollarPpc,
-                    달러원가: dollarCost,
-                    달러net: dollarNet,
-                    공급가: supplyPrice,
-                    마진: margin,
-                    원화PPC:
-                        currentMode === "PPC" && prod.원화PPC !== undefined
-                            ? prod.원화PPC
-                            : Math.round(wonPpc),
-                    마진율:
-                        currentMode === "MARGIN" && prod.마진율 !== undefined
-                            ? prod.마진율
-                            : marginPercent,
-                };
-            });
-        } else {
-            const processed: Record<string, any[]> = {};
-            for (const [groupName, prods] of Object.entries(productsToProcess)) {
-                processed[groupName] = getFinalProducts(prods, currentMode);
-            }
-            return processed;
-        }
-    };
 
     // 견적 수정 저장
     const handleSaveEdit = (quoteId: number) => {
         // 저장하기 직전에 화면에 보여지는 실시간 계산값들을 배열에 완전히 덮어씌웁니다.
-        const finalProducts = getFinalProducts(editProducts);
+        const finalProducts = getFinalProducts(editProducts, calcMode);
 
         // 수정 저장 시에도 빈 칸으로 남겨진 비고(Notes)를 깔끔하게 걸러냅니다.
         const finalEditNotes = editNotes
@@ -580,7 +762,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 projectName: editProjectName,
                 isOrdered: editIsOrdered,
                 isLost: editIsLost,
+                stage: editStage,
                 originalUpdatedAt: editOriginalUpdatedAt,
+                defaultGroup: editDefaultGroup,
             },
             { method: "post", encType: "application/json" },
         );
@@ -641,6 +825,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             }
             return next;
         });
+        if (editDefaultGroup === oldName) {
+            setEditDefaultGroup(newName);
+        }
     };
 
     // 그룹 추가 핸들러
@@ -653,24 +840,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             const newGroupName = `원가표${idx}`;
             return {
                 ...prev,
-                [newGroupName]: [
-                    {
-                        제품코드: "",
-                        제품설명: "",
-                        lpd: 0,
-                        lpw: 0,
-                        수량: 1,
-                        기간: 1,
-                        DC달러: 0,
-                        환율: 0,
-                        DC원화: 0,
-                        공급가: 0,
-                        마진: 0,
-                        년차: 1,
-                        원화PPC: 0,
-                        마진율: "0.0",
-                    },
-                ],
+                [newGroupName]: [createEmptyProductRow()],
             };
         });
     };
@@ -687,6 +857,12 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 delete next[groupName];
                 return next;
             });
+            if (editDefaultGroup === groupName) {
+                const remaining = Object.keys(editProducts).filter((k) => k !== groupName);
+                if (remaining.length > 0) {
+                    setEditDefaultGroup(remaining[0]);
+                }
+            }
         }
     };
 
@@ -712,11 +888,40 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 }
             }
 
-            // 공통 역산 계산 유틸 호출
+            // 역산 로직 추가 (원화PPC 또는 마진율 변경 시 DC원화 재계산)
             if (field === "원화PPC" || field === "마진율") {
-                const calculatedDcWon = calculateReverseDCWon(field, value, updatedProduct);
-                if (calculatedDcWon !== null) {
-                    updatedProduct.DC원화 = calculatedDcWon;
+                const lpd = Number(updatedProduct.lpd) || 0;
+                const lpw = Number(updatedProduct.lpw) || 0;
+                const qty = Number(updatedProduct.수량) || 0;
+                const period = Number(updatedProduct.기간) || 0;
+                const dcDollar = Number(updatedProduct.DC달러) || 0;
+                const exchangeRate = Number(updatedProduct.환율) || 0;
+                const baseTotalLpw = lpw * qty * period;
+
+                if (baseTotalLpw > 0) {
+                    let targetSupply: number | null = null;
+                    if (field === "원화PPC") {
+                        targetSupply = (Number(value) || 0) * qty * period;
+                    } else if (field === "마진율") {
+                        const inputMarginPercent = Number(value) || 0;
+                        if (inputMarginPercent < 100) {
+                            const dollarPpc = lpd * (1 - dcDollar / 100);
+                            const wonNet =
+                                dollarPpc * qty * period * exchangeRate;
+                            targetSupply =
+                                Math.round(
+                                    wonNet /
+                                    (1 - inputMarginPercent / 100) /
+                                    1000,
+                                ) * 1000;
+                        }
+                    }
+                    if (targetSupply !== null) {
+                        const rawDcWon =
+                            (1 - targetSupply / baseTotalLpw) * 100;
+                        updatedProduct.DC원화 =
+                            Math.trunc(rawDcWon * 100) / 100;
+                    }
                 }
             }
 
@@ -734,22 +939,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             ...prev,
             [groupName]: [
                 ...(prev[groupName] || []),
-                {
-                    제품코드: "",
-                    제품설명: "",
-                    lpd: 0,
-                    lpw: 0,
-                    수량: 1,
-                    기간: 1,
-                    DC달러: 0,
-                    환율: 0,
-                    DC원화: 0,
-                    공급가: 0,
-                    마진: 0,
-                    년차: 1,
-                    원화PPC: 0,
-                    마진율: "0.0",
-                },
+                createEmptyProductRow(),
             ],
         }));
     };
@@ -799,6 +989,35 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         }
         newParams.set("page", "1"); // 검색 시 1페이지로 리셋
         setSearchParams(newParams);
+    };
+
+    const currentVendorsParam = searchParams.get("vendor");
+    const selectedVendors = currentVendorsParam === null
+        ? ["Broadcom", "Omnissa"]
+        : currentVendorsParam === "none"
+            ? []
+            : currentVendorsParam.split(",");
+
+    const handleVendorFilterCheckbox = (vendorName: string, checked: boolean) => {
+        let nextVendors = [...selectedVendors];
+        if (checked) {
+            if (!nextVendors.includes(vendorName)) {
+                nextVendors.push(vendorName);
+            }
+        } else {
+            nextVendors = nextVendors.filter((v) => v !== vendorName);
+        }
+
+        let paramValue = "";
+        if (nextVendors.length === 0) {
+            paramValue = "none";
+        } else if (nextVendors.length === 2) {
+            paramValue = "";
+        } else {
+            paramValue = nextVendors[0];
+        }
+
+        handleFilterChange("vendor", paramValue);
     };
 
     const toggleRow = (id: number) => {
@@ -907,7 +1126,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 .filter(Boolean)
                 .join("-");
 
-            const finalGroupedProducts = getFinalProducts(grouped);
+            const finalGroupedProducts = getFinalProducts(grouped, quote.quote_type === 0 ? "PPC" : "DC");
 
             await Promise.all([
                 downloadFile(
@@ -949,11 +1168,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         return (
             <th key={columnKey} className={`p-3 align-top ${className}`}>
                 <div
-                    className={`flex items-center justify-between font-semibold select-none mb-2 ${
-                        sortable
-                            ? "cursor-pointer group hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                            : ""
-                    }`}
+                    className={`flex items-center justify-between font-semibold select-none mb-2 ${sortable
+                        ? "cursor-pointer group hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+                        : ""
+                        }`}
                     onClick={() => sortable && handleSort(columnKey)}
                 >
                     <span>{label}</span>
@@ -1073,20 +1291,28 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
                 <div className="flex items-center gap-3">
                     <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
-                        <Tag className="w-4 h-4 mr-1.5 text-gray-500" /> 벤더
-                        필터
+                        <Tag className="w-4 h-4 mr-1.5 text-gray-500" /> 벤더 필터
                     </span>
-                    <select
-                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
-                        value={searchParams.get("vendor") || ""}
-                        onChange={(e) =>
-                            handleFilterChange("vendor", e.target.value)
-                        }
-                    >
-                        <option value="">벤더 전체</option>
-                        <option value="Broadcom">Broadcom</option>
-                        <option value="Omnissa">Omnissa</option>
-                    </select>
+                    <div className="flex gap-4 items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900">
+                        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={selectedVendors.includes("Broadcom")}
+                                onChange={(e) => handleVendorFilterCheckbox("Broadcom", e.target.checked)}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                            />
+                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Broadcom</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={selectedVendors.includes("Omnissa")}
+                                onChange={(e) => handleVendorFilterCheckbox("Omnissa", e.target.checked)}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                            />
+                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Omnissa</span>
+                        </label>
+                    </div>
                 </div>
 
                 {/* 출력하기 버튼 (가장 우측으로 밀기 위해 ml-auto 사용) */}
@@ -1102,34 +1328,43 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 flex flex-col">
                 <div className="overflow-auto max-h-[calc(100vh-250px)] rounded-t-lg">
-                    <table className="w-full text-left border-collapse relative">
+                    <table className="w-full text-left border-collapse relative table-fixed">
                         <thead className="sticky top-0 z-20 bg-gray-100 dark:bg-gray-700 shadow-[0_1px_0_0_#e5e7eb] dark:shadow-[0_1px_0_0_#4b5563]">
                             <tr className="text-gray-800 dark:text-gray-200 divide-x divide-gray-200 dark:divide-gray-600">
-                                {renderTh("고객사", "client_company")}
-                                {renderTh("파트너사", "partner_company")}
+                                {renderTh("고객사", "client_company", {
+                                    className: "w-[12%]",
+                                })}
+                                {renderTh("파트너사", "partner_company", {
+                                    className: "w-[12%]",
+                                })}
                                 {renderTh("담당자", "partner_contact_name", {
-                                    className: "w-32",
+                                    className: "w-[10%]",
                                 })}
                                 {renderTh("총판", "dist_contact_name", {
-                                    className: "w-28",
+                                    className: "w-[8%]",
                                 })}
-                                {renderTh("사업명", "project_name")}
+                                {renderTh("사업명", "project_name", {
+                                    className: "w-[20%]",
+                                })}
+                                {renderTh("단계", "stage", {
+                                    sortable: false,
+                                    searchable: false,
+                                    className: "w-[6%] whitespace-nowrap",
+                                })}
                                 {renderTh("총 공급가", "totalSupplyPrice", {
                                     sortable: false,
                                     searchable: false,
-                                    className: "whitespace-nowrap",
+                                    className: "w-[10%] whitespace-nowrap",
                                 })}
                                 {renderTh("견적날짜", "created_at", {
                                     sortable: true,
                                     searchable: false,
-                                    className:
-                                        "min-w-[110px] whitespace-nowrap",
+                                    className: "w-[10%] whitespace-nowrap",
                                 })}
                                 {renderTh("마지막 수정날짜", "updated_at", {
                                     sortable: true,
                                     searchable: false,
-                                    className:
-                                        "min-w-[140px] whitespace-nowrap",
+                                    className: "w-[12%] whitespace-nowrap",
                                 })}
                             </tr>
                         </thead>
@@ -1140,36 +1375,38 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                         className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/50 text-gray-700 dark:text-gray-300 cursor-pointer divide-x divide-gray-200 dark:divide-gray-700"
                                         onClick={() => toggleRow(quote.id)}
                                     >
-                                        <td className="p-4">
+                                        <td className="p-4 truncate" title={quote.client_company}>
                                             {quote.client_company}
                                         </td>
-                                        <td className="p-4">
+                                        <td className="p-4 truncate" title={quote.partner_company}>
                                             {quote.partner_company}
                                         </td>
-                                        <td className="p-4">
+                                        <td className="p-4 truncate" title={quote.partner_contact_name}>
                                             {quote.partner_contact_name}
                                         </td>
-                                        <td className="p-4">
+                                        <td className="p-4 truncate" title={quote.dist_contact_name}>
                                             {quote.dist_contact_name}
                                         </td>
-                                        <td className="p-4">
+                                        <td className="p-4 truncate" title={quote.project_name}>
                                             {quote.project_name}
                                         </td>
-                                        <td className="p-4 font-medium">
-                                            {quote.totalSupplyPrice.toLocaleString()}
-                                            원
+                                        <td className="p-4 truncate">
+                                            {quote.stage !== undefined && quote.stage !== null ? `${quote.stage}%` : "-"}
                                         </td>
-                                        <td className="p-4">
+                                        <td className="p-4 font-medium truncate">
+                                            {quote.totalSupplyPrice.toLocaleString()}원
+                                        </td>
+                                        <td className="p-4 truncate">
                                             {quote.createdAtDate}
                                         </td>
-                                        <td className="p-4">
+                                        <td className="p-4 truncate">
                                             {quote.updatedAtDate}
                                         </td>
                                     </tr>
                                     {/* 펼쳐진 영역 상세 내용 */}
                                     {expandedRows.has(quote.id) && (
                                         <tr className="no-hover bg-slate-50/50 dark:bg-slate-900/30 border-y border-gray-200 dark:border-gray-700 shadow-inner">
-                                            <td colSpan={8} className="p-6">
+                                            <td colSpan={9} className="p-6">
                                                 <div className="space-y-6">
                                                     {/* 0. 담당자 및 영업 요약 정보 */}
                                                     <div className="grid grid-cols-1 md:grid-cols-4 gap-6 bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
@@ -1257,7 +1494,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                             </h4>
                                                             <div className="text-sm text-gray-600 dark:text-gray-400 space-y-2">
                                                                 {editingQuoteId ===
-                                                                quote.id ? (
+                                                                    quote.id ? (
                                                                     <>
                                                                         <div className="flex flex-col gap-1">
                                                                             <label className="text-xs font-medium text-gray-500">
@@ -1277,6 +1514,33 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             .value,
                                                                                     )
                                                                                 }
+                                                                                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
+                                                                            />
+                                                                        </div>
+                                                                        <div className="flex flex-col gap-1 mt-1">
+                                                                            <label className="text-xs font-medium text-gray-500">
+                                                                                단계 (%)
+                                                                            </label>
+                                                                            <input
+                                                                                type="number"
+                                                                                value={editStage}
+                                                                                onFocus={(e) => {
+                                                                                    prevStageValRef.current = Number(e.target.value) || 10;
+                                                                                }}
+                                                                                onChange={(e) => setEditStage(Number(e.target.value) || 0)}
+                                                                                onBlur={(e) => {
+                                                                                    const newVal = Number(e.target.value) || 0;
+                                                                                    if (newVal === prevStageValRef.current) return;
+                                                                                    const success = updateAllProductsStage(newVal);
+                                                                                    if (!success) {
+                                                                                        setEditStage(prevStageValRef.current);
+                                                                                    }
+                                                                                }}
+                                                                                onKeyDown={(e) => {
+                                                                                    if (e.key === "Enter") {
+                                                                                        e.currentTarget.blur();
+                                                                                    }
+                                                                                }}
                                                                                 className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
                                                                             />
                                                                         </div>
@@ -1337,6 +1601,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                             사업명:{" "}
                                                                             {quote.project_name ||
                                                                                 ""}
+                                                                        </p>
+                                                                        <p>
+                                                                            단계: {quote.stage !== undefined && quote.stage !== null ? `${quote.stage}%` : "-"}
                                                                         </p>
                                                                         <div className="flex items-center gap-4 mt-1">
                                                                             <div className="flex items-center gap-2">
@@ -1485,7 +1752,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                 ? calcMode
                                                                 : (quote.quote_type === 0 ? "PPC" : "DC");
                                                             const finalProds = getFinalProducts(groupProducts as any[], currentMode) as any[];
-                                                            
+
                                                             const groupTotalSupply = finalProds.reduce((sum, p) => sum + (Number(p.공급가) || 0), 0);
                                                             const groupTotalMargin = finalProds.reduce((sum, p) => sum + (Number(p.마진) || 0), 0);
                                                             const groupMarginPercent = groupTotalSupply ? ((groupTotalMargin / groupTotalSupply) * 100).toFixed(1) : "0.0";
@@ -1493,13 +1760,34 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                             return (
                                                                 <div key={groupName} className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm space-y-4">
                                                                     <div className="flex justify-between items-center border-b dark:border-gray-700 pb-3">
-                                                                        <div className="flex items-center gap-3 w-1/3">
+                                                                        <div className="flex items-center gap-4 w-1/2">
                                                                             {isEditing ? (
-                                                                                <GroupNameInput value={groupName} onRename={(newName) => handleRenameGroup(groupName, newName)} />
+                                                                                <>
+                                                                                    <div className="w-52">
+                                                                                        <GroupNameInput value={groupName} onRename={(newName) => handleRenameGroup(groupName, newName)} />
+                                                                                    </div>
+                                                                                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                                                                                        <input
+                                                                                            type="radio"
+                                                                                            name={`defaultGroupSelection-${quote.id}`}
+                                                                                            checked={editDefaultGroup === groupName}
+                                                                                            onChange={() => setEditDefaultGroup(groupName)}
+                                                                                            className="w-3.5 h-3.5 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                                                                                        />
+                                                                                        <span className="font-semibold text-gray-700 dark:text-gray-300">기본 원가표</span>
+                                                                                    </label>
+                                                                                </>
                                                                             ) : (
-                                                                                <h4 className="font-bold text-gray-800 dark:text-gray-200 text-lg">
-                                                                                    {groupName}
-                                                                                </h4>
+                                                                                <div className="flex items-center gap-3">
+                                                                                    <h4 className="font-bold text-gray-800 dark:text-gray-200 text-lg">
+                                                                                        {groupName}
+                                                                                    </h4>
+                                                                                    {(groupProducts as any[]).length > 0 && ((groupProducts as any[])[0] as any).group_default === 1 && (
+                                                                                        <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400 ring-1 ring-inset ring-blue-500/10 dark:ring-blue-400/20">
+                                                                                            기본
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
                                                                             )}
                                                                         </div>
                                                                         <div className="flex items-center gap-6">
@@ -1531,17 +1819,235 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         </div>
                                                                     </div>
 
-                                                                    <DetailedCostTable
-                                                                        groupName={groupName}
-                                                                        rawProducts={groupProducts as any[]}
-                                                                        calcProducts={finalProds}
-                                                                        isEditing={isEditing}
-                                                                        calcMode={currentMode}
-                                                                        masterProducts={loaderData.masterProducts}
-                                                                        vendorFilter={quote.vendor}
-                                                                        onProductChange={handleProductChange}
-                                                                        onRemoveProduct={handleRemoveProduct}
-                                                                    />
+                                                                    <div className="overflow-x-auto rounded-md border border-gray-200 dark:border-gray-700">
+                                                                        <table className="w-full text-xs text-left table-fixed min-w-[1150px]">
+                                                                            <thead className="bg-gray-50 dark:bg-gray-800/80 text-gray-700 dark:text-gray-300 border-b dark:border-gray-700 whitespace-nowrap">
+                                                                                <tr className="divide-x divide-gray-200 dark:divide-gray-700">
+                                                                                    <th className="p-1.5 font-semibold text-center w-14">매출년</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-14">매출월</th>
+                                                                                    <th className="p-1.5 font-semibold w-32">제품코드</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-12">수량</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-12">기간</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-18">DC달러(%)</th>
+                                                                                    <th className="p-1.5 font-semibold text-right w-22">달러PPC($)</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-22">달러net($)</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-18">환율(₩)</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-24">원화PPC(₩)</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-18">DC원화(%)</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-24">공급가(₩)</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-24">마진(₩)</th>
+                                                                                    <th className="p-1.5 font-semibold text-right w-20">마진%</th>
+                                                                                    <th className="p-1.5 font-semibold text-center w-14">단계</th>
+                                                                                    {isEditing && <th className="p-1.5 font-semibold text-center w-12">관리</th>}
+                                                                                </tr>
+                                                                            </thead>
+                                                                            <tbody>
+                                                                                {finalProds.map((calcProd: any, idx: number) => {
+                                                                                    const rawProd = (groupProducts as any[])[idx];
+                                                                                    if (!rawProd) return null;
+
+                                                                                    return (
+                                                                                        <tr
+                                                                                            key={idx}
+                                                                                            className="border-b last:border-b-0 border-gray-200 dark:border-gray-600 hover:!bg-blue-100 dark:hover:!bg-gray-600 divide-x divide-gray-200 dark:divide-gray-600"
+                                                                                        >
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        value={rawProd.년차}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "년차", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-center px-1.5">{calcProd.년차}</div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        min={1}
+                                                                                                        max={12}
+                                                                                                        value={rawProd.매출월 !== undefined ? rawProd.매출월 : 1}
+                                                                                                        onChange={(e) => {
+                                                                                                            const val = Math.max(1, Math.min(12, Number(e.target.value) || 1));
+                                                                                                            handleProductChange(groupName, idx, "매출월", val);
+                                                                                                        }}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-center px-1.5">{calcProd.매출월 || 1}</div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <select
+                                                                                                        value={rawProd.제품코드}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "제품코드", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs"
+                                                                                                    >
+                                                                                                        <option value="">제품 선택</option>
+                                                                                                        {loaderData.masterProducts
+                                                                                                            .filter((p: any) => (!quote.vendor || quote.vendor.split(",").includes(p.vendor)) && (p.available === 1 || p.code === rawProd.제품코드))
+                                                                                                            .map((p: any) => (
+                                                                                                                <option key={p.code} value={p.code}>
+                                                                                                                    {p.available === 0 ? "[단종] " : ""}{p.code} - {p.description}{" "}
+                                                                                                                    {p.vendor && !quote.vendor ? ` [${p.vendor}]` : ""}
+                                                                                                                </option>
+                                                                                                            ))}
+                                                                                                    </select>
+                                                                                                ) : (
+                                                                                                    <span className="px-1.5">{calcProd.제품코드}</span>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        value={rawProd.수량}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "수량", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-right px-1.5">{calcProd.수량}</div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        value={rawProd.기간}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "기간", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-center px-1.5">{calcProd.기간}</div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        step="any"
+                                                                                                        value={rawProd.DC달러}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "DC달러", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-right px-1.5">{calcProd.DC달러}%</div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            <td className="p-1.5 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                ${Number(calcProd.달러PPC).toLocaleString(undefined, {
+                                                                                                    minimumFractionDigits: 2,
+                                                                                                    maximumFractionDigits: 2,
+                                                                                                })}
+                                                                                            </td>
+                                                                                            <td className="p-1.5 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                ${Number(calcProd.달러net).toLocaleString(undefined, {
+                                                                                                    minimumFractionDigits: 2,
+                                                                                                    maximumFractionDigits: 2,
+                                                                                                })}
+                                                                                            </td>
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        step="any"
+                                                                                                        value={rawProd.환율}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "환율", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-right px-1.5">₩{Number(calcProd.환율).toLocaleString()}</div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            {isEditing && currentMode === "PPC" ? (
+                                                                                                <td className="p-1.5">
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        value={rawProd.원화PPC !== undefined ? rawProd.원화PPC : calcProd.원화PPC}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "원화PPC", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right font-medium"
+                                                                                                    />
+                                                                                                </td>
+                                                                                            ) : (
+                                                                                                <td className="p-1.5 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                    {Number(calcProd.원화PPC).toLocaleString()}
+                                                                                                </td>
+                                                                                            )}
+                                                                                            {isEditing && currentMode === "DC" ? (
+                                                                                                <td className="p-1.5">
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        step="any"
+                                                                                                        value={rawProd.DC원화}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "DC원화", e.target.value)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                                                                                                    />
+                                                                                                </td>
+                                                                                            ) : (
+                                                                                                <td className="p-1.5 text-right text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                    {calcProd.DC원화}%
+                                                                                                </td>
+                                                                                            )}
+                                                                                            <td className="p-1.5 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                ₩{Number(calcProd.공급가).toLocaleString()}
+                                                                                            </td>
+                                                                                            <td className="p-1.5 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                ₩{Math.round(Number(calcProd.마진)).toLocaleString()}
+                                                                                            </td>
+                                                                                            {isEditing && currentMode === "MARGIN" ? (
+                                                                                                <td className="p-1.5">
+                                                                                                    <div className="flex items-center">
+                                                                                                        <input
+                                                                                                            type="number"
+                                                                                                            step="any"
+                                                                                                            value={rawProd.마진율 !== undefined ? rawProd.마진율 : calcProd.마진율}
+                                                                                                            onChange={(e) => handleProductChange(groupName, idx, "마진율", e.target.value)}
+                                                                                                            className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right font-bold text-blue-600 dark:text-blue-400"
+                                                                                                        />
+                                                                                                        <span className="ml-1 text-blue-600 dark:text-blue-400 font-bold">%</span>
+                                                                                                    </div>
+                                                                                                </td>
+                                                                                            ) : (
+                                                                                                <td className="p-1.5 text-right font-bold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/50">
+                                                                                                    {calcProd.마진율}%
+                                                                                                </td>
+                                                                                            )}
+                                                                                            <td className="p-1.5">
+                                                                                                {isEditing ? (
+                                                                                                    <input
+                                                                                                        type="number"
+                                                                                                        value={rawProd.stage !== undefined ? rawProd.stage : 10}
+                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "stage", Number(e.target.value) || 0)}
+                                                                                                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                                                                                                    />
+                                                                                                ) : (
+                                                                                                    <div className="text-center px-1.5">
+                                                                                                        {calcProd.stage !== undefined && calcProd.stage !== null ? `${calcProd.stage}%` : "10%"}
+                                                                                                    </div>
+                                                                                                )}
+                                                                                            </td>
+                                                                                            {isEditing && (
+                                                                                                <td className="p-1.5 text-center">
+                                                                                                    <button
+                                                                                                        type="button"
+                                                                                                        onClick={() => handleRemoveProduct(groupName, idx)}
+                                                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-7 h-7"
+                                                                                                        title="삭제"
+                                                                                                    >
+                                                                                                        <Trash2 className="w-3.5 h-3.5" />
+                                                                                                    </button>
+                                                                                                </td>
+                                                                                            )}
+                                                                                        </tr>
+                                                                                    );
+                                                                                })}
+                                                                            </tbody>
+                                                                        </table>
+                                                                    </div>
                                                                     {(groupProducts as any[]).length === 0 && (
                                                                         <div className="p-6 text-center text-gray-500 dark:text-gray-400">
                                                                             추가된 제품이 없습니다.
@@ -1580,109 +2086,109 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                         (quote.noteList &&
                                                             quote.noteList
                                                                 .length >
-                                                                0)) && (
-                                                        <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
-                                                            <div className="flex justify-between items-center mb-4">
-                                                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
-                                                                    <FileText className="w-5 h-5 mr-2 text-gray-500" />
-                                                                    비고
-                                                                </h3>
-                                                                {editingQuoteId ===
-                                                                    quote.id && (
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={
-                                                                            handleAddNote
-                                                                        }
-                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 h-8 px-3 shadow-sm"
-                                                                    >
-                                                                        <Plus className="w-4 h-4 mr-1" />{" "}
+                                                            0)) && (
+                                                            <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                                                <div className="flex justify-between items-center mb-4">
+                                                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
+                                                                        <FileText className="w-5 h-5 mr-2 text-gray-500" />
                                                                         비고
-                                                                        추가
-                                                                    </button>
+                                                                    </h3>
+                                                                    {editingQuoteId ===
+                                                                        quote.id && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={
+                                                                                    handleAddNote
+                                                                                }
+                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 h-8 px-3 shadow-sm"
+                                                                            >
+                                                                                <Plus className="w-4 h-4 mr-1" />{" "}
+                                                                                비고
+                                                                                추가
+                                                                            </button>
+                                                                        )}
+                                                                </div>
+
+                                                                {editingQuoteId ===
+                                                                    quote.id ? (
+                                                                    <div className="space-y-2">
+                                                                        {editNotes.map(
+                                                                            (
+                                                                                note,
+                                                                                idx,
+                                                                            ) => (
+                                                                                <div
+                                                                                    key={
+                                                                                        idx
+                                                                                    }
+                                                                                    className="flex items-start gap-2"
+                                                                                >
+                                                                                    <span className="text-gray-400 mt-2 text-sm">
+                                                                                        •
+                                                                                    </span>
+                                                                                    <textarea
+                                                                                        value={
+                                                                                            note
+                                                                                        }
+                                                                                        onChange={(
+                                                                                            e,
+                                                                                        ) =>
+                                                                                            handleNoteChange(
+                                                                                                idx,
+                                                                                                e
+                                                                                                    .target
+                                                                                                    .value,
+                                                                                            )
+                                                                                        }
+                                                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow min-h-[40px] resize-y"
+                                                                                        placeholder="비고 내용을 입력하세요"
+                                                                                    />
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() =>
+                                                                                            handleRemoveNote(
+                                                                                                idx,
+                                                                                            )
+                                                                                        }
+                                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8 mt-1"
+                                                                                    >
+                                                                                        <Trash2 className="w-4 h-4" />
+                                                                                    </button>
+                                                                                </div>
+                                                                            ),
+                                                                        )}
+                                                                        {editNotes.length ===
+                                                                            0 && (
+                                                                                <div className="text-center text-gray-500 dark:text-gray-400 py-6 border border-dashed border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/50">
+                                                                                    추가된
+                                                                                    비고가
+                                                                                    없습니다.
+                                                                                </div>
+                                                                            )}
+                                                                    </div>
+                                                                ) : (
+                                                                    <ul className="list-disc pl-5 text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+                                                                        {quote.noteList.map(
+                                                                            (
+                                                                                noteText: string,
+                                                                                idx: number,
+                                                                            ) => (
+                                                                                <li
+                                                                                    key={
+                                                                                        idx
+                                                                                    }
+                                                                                    className="whitespace-pre-wrap leading-relaxed"
+                                                                                >
+                                                                                    {
+                                                                                        noteText
+                                                                                    }
+                                                                                </li>
+                                                                            ),
+                                                                        )}
+                                                                    </ul>
                                                                 )}
                                                             </div>
-
-                                                            {editingQuoteId ===
-                                                            quote.id ? (
-                                                                <div className="space-y-2">
-                                                                    {editNotes.map(
-                                                                        (
-                                                                            note,
-                                                                            idx,
-                                                                        ) => (
-                                                                            <div
-                                                                                key={
-                                                                                    idx
-                                                                                }
-                                                                                className="flex items-start gap-2"
-                                                                            >
-                                                                                <span className="text-gray-400 mt-2 text-sm">
-                                                                                    •
-                                                                                </span>
-                                                                                <textarea
-                                                                                    value={
-                                                                                        note
-                                                                                    }
-                                                                                    onChange={(
-                                                                                        e,
-                                                                                    ) =>
-                                                                                        handleNoteChange(
-                                                                                            idx,
-                                                                                            e
-                                                                                                .target
-                                                                                                .value,
-                                                                                        )
-                                                                                    }
-                                                                                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow min-h-[40px] resize-y"
-                                                                                    placeholder="비고 내용을 입력하세요"
-                                                                                />
-                                                                                <button
-                                                                                    type="button"
-                                                                                    onClick={() =>
-                                                                                        handleRemoveNote(
-                                                                                            idx,
-                                                                                        )
-                                                                                    }
-                                                                                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8 mt-1"
-                                                                                >
-                                                                                    <Trash2 className="w-4 h-4" />
-                                                                                </button>
-                                                                            </div>
-                                                                        ),
-                                                                    )}
-                                                                    {editNotes.length ===
-                                                                        0 && (
-                                                                        <div className="text-center text-gray-500 dark:text-gray-400 py-6 border border-dashed border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/50">
-                                                                            추가된
-                                                                            비고가
-                                                                            없습니다.
-                                                                        </div>
-                                                                    )}
-                                                                </div>
-                                                            ) : (
-                                                                <ul className="list-disc pl-5 text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
-                                                                    {quote.noteList.map(
-                                                                        (
-                                                                            noteText: string,
-                                                                            idx: number,
-                                                                        ) => (
-                                                                            <li
-                                                                                key={
-                                                                                    idx
-                                                                                }
-                                                                                className="whitespace-pre-wrap leading-relaxed"
-                                                                            >
-                                                                                {
-                                                                                    noteText
-                                                                                }
-                                                                            </li>
-                                                                        ),
-                                                                    )}
-                                                                </ul>
-                                                            )}
-                                                        </div>
-                                                    )}
+                                                        )}
                                                 </div>
                                             </td>
                                         </tr>

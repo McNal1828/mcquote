@@ -1,8 +1,7 @@
 import { useState, Fragment } from "react";
 import { Link } from "react-router";
 import db from "../db.server";
-import { getFinalProducts, normalizeProducts } from "~/utils/calculator";
-import DetailedCostTable from "~/components/DetailedCostTable";
+import { getFinalProducts } from "~/utils/calculator";
 import type { Route } from "./+types/history";
 import {
     ArrowLeft,
