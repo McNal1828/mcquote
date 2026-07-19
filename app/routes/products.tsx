@@ -15,11 +15,12 @@ import {
     ChevronUp,
     ChevronsUpDown,
     Edit2,
+    ArchiveRestore,
 } from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
-        "SELECT code, description, lpd, lpw, vendor FROM products",
+        "SELECT id, code, description, lpd, lpw, vendor, available FROM products",
     );
     const products = stmt.all();
     return { products };
@@ -29,22 +30,22 @@ export async function loader({ request }: Route.LoaderArgs) {
 export async function action({ request }: Route.ActionArgs) {
     const formData = await request.formData();
     const intent = formData.get("intent");
+    const id = formData.get("id");
     const code = formData.get("code");
     const description = formData.get("description");
     const lpd = formData.get("lpd");
     const lpw = formData.get("lpw");
     const vendor = formData.get("vendor");
 
-    if (!code) {
-        return { error: "제품 코드가 필요합니다." };
-    }
-
     // intent 값에 따라 DB 작업을 분기합니다.
     if (intent === "add") {
+        if (!code) {
+            return { error: "제품 코드가 필요합니다." };
+        }
         try {
             const stmt = db.prepare(`
-                INSERT INTO products (code, description, lpd, lpw, vendor)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO products (code, description, lpd, lpw, vendor, available)
+                VALUES (?, ?, ?, ?, ?, 1)
             `);
             stmt.run(code, description, Number(lpd), Number(lpw), vendor || "");
             return { success: true, intent: "add" };
@@ -55,9 +56,12 @@ export async function action({ request }: Route.ActionArgs) {
             };
         }
     } else if (intent === "delete") {
+        if (!id) {
+            return { error: "제품 ID가 필요합니다." };
+        }
         try {
-            const stmt = db.prepare("DELETE FROM products WHERE code = ?");
-            stmt.run(code);
+            const stmt = db.prepare("UPDATE products SET available = 0 WHERE id = ?");
+            stmt.run(Number(id));
             return { success: true, intent: "delete" };
         } catch (error) {
             return {
@@ -65,15 +69,32 @@ export async function action({ request }: Route.ActionArgs) {
                 intent: "delete",
             };
         }
+    } else if (intent === "restore") {
+        if (!id) {
+            return { error: "제품 ID가 필요합니다." };
+        }
+        try {
+            const stmt = db.prepare("UPDATE products SET available = 1 WHERE id = ?");
+            stmt.run(Number(id));
+            return { success: true, intent: "restore" };
+        } catch (error) {
+            return {
+                error: "제품 복구 중 오류가 발생했습니다.",
+                intent: "restore",
+            };
+        }
     } else {
-        // 'edit' 또는 정의되지 않은 intent의 경우 수정을 시도합니다.
+        // 'edit'
+        if (!id) {
+            return { error: "제품 ID가 필요합니다." };
+        }
         try {
             const stmt = db.prepare(`
                 UPDATE products
                 SET description = ?, lpd = ?, lpw = ?, vendor = ?
-                WHERE code = ?
+                WHERE id = ?
             `);
-            stmt.run(description, Number(lpd), Number(lpw), vendor || "", code);
+            stmt.run(description, Number(lpd), Number(lpw), vendor || "", Number(id));
             return { success: true, intent: "edit" };
         } catch (error) {
             return {
@@ -85,6 +106,13 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Products({ loaderData }: Route.ComponentProps) {
+    const [showAvailableOnly, setShowAvailableOnly] = useState(true);
+
+    // 사용 여부 필터를 적용한 제품 리스트
+    const filteredProducts = loaderData.products.filter(
+        (p: any) => p.available === (showAvailableOnly ? 1 : 0)
+    );
+
     // 공통 테이블 정렬 및 필터 훅 사용
     const {
         processedData,
@@ -93,7 +121,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
         handleFilterChange,
         handleSort,
     } = useTableFeatures({
-        data: loaderData.products,
+        data: filteredProducts,
     });
 
     // 백그라운드 데이터 전송을 위한 훅
@@ -141,14 +169,16 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                 if (fetcher.data.intent === "edit")
                     msg = "성공적으로 수정되었습니다.";
                 if (fetcher.data.intent === "delete")
-                    msg = "성공적으로 삭제되었습니다.";
+                    msg = "성공적으로 삭제(비활성화)되었습니다.";
+                if (fetcher.data.intent === "restore")
+                    msg = "성공적으로 복구되었습니다.";
                 setToast({ message: msg, type: "success" });
             }
         }
     }, [fetcher.state, fetcher.data]);
 
-    // 수정 상태 관리
-    const [editingCode, setEditingCode] = useState<string | null>(null);
+    // 수정 상태 관리 (id 기준)
+    const [editingId, setEditingId] = useState<number | null>(null);
     const [editForm, setEditForm] = useState({
         description: "",
         vendor: "",
@@ -157,7 +187,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
     });
 
     const handleEditClick = (product: any) => {
-        setEditingCode(product.code);
+        setEditingId(product.id);
         setEditForm({
             description: product.description || "",
             vendor: product.vendor || "",
@@ -166,11 +196,12 @@ export default function Products({ loaderData }: Route.ComponentProps) {
         });
     };
 
-    const handleSave = (code: string) => {
+    const handleSave = (id: number, code: string) => {
         // fetcher를 통해 페이지 이동 없이 POST 요청 전송
         fetcher.submit(
             {
                 intent: "edit",
+                id: id.toString(),
                 code,
                 description: editForm.description,
                 vendor: editForm.vendor,
@@ -179,13 +210,19 @@ export default function Products({ loaderData }: Route.ComponentProps) {
             },
             { method: "post" },
         );
-        setEditingCode(null);
+        setEditingId(null);
     };
 
-    const handleDelete = (code: string) => {
-        if (window.confirm("정말로 이 제품을 삭제하시겠습니까?")) {
-            fetcher.submit({ intent: "delete", code }, { method: "post" });
-            setEditingCode(null);
+    const handleDelete = (id: number) => {
+        if (window.confirm("정말로 이 제품을 삭제(비활성화)하시겠습니까?")) {
+            fetcher.submit({ intent: "delete", id: id.toString() }, { method: "post" });
+            setEditingId(null);
+        }
+    };
+
+    const handleRestore = (id: number) => {
+        if (window.confirm("이 제품을 다시 사용 가능한 상태로 복구하시겠습니까?")) {
+            fetcher.submit({ intent: "restore", id: id.toString() }, { method: "post" });
         }
     };
 
@@ -237,7 +274,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
     return (
         <div className="p-8 container mx-auto">
             <h1 className="text-3xl font-bold mb-6 dark:text-white">
-                제품 목록
+                제품 관리
             </h1>
 
             {/* 제품 추가 폼 영역 */}
@@ -332,6 +369,32 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                 </addFetcher.Form>
             </div>
 
+            {/* 필터 탭/토글 영역 */}
+            <div className="flex justify-end gap-2 mb-4">
+                <button
+                    type="button"
+                    onClick={() => setShowAvailableOnly(true)}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                        showAvailableOnly
+                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                            : "bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
+                >
+                    <CheckCircle2 className="w-4 h-4" /> 사용 가능 제품
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setShowAvailableOnly(false)}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                        !showAvailableOnly
+                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                            : "bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
+                >
+                    <ArchiveRestore className="w-4 h-4" /> 사용 불가능 제품 (삭제됨)
+                </button>
+            </div>
+
             <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                 <table className="w-full text-left border-collapse">
                     <thead>
@@ -341,169 +404,189 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                             {renderTh("설명", "description")}
                             {renderTh("LP 달러", "lpd")}
                             {renderTh("LP 원화", "lpw")}
-                            <th className="p-3 w-24 text-center align-middle font-semibold">
+                            <th className="p-3 w-28 text-center align-middle font-semibold">
                                 관리
                             </th>
                         </tr>
                     </thead>
                     <tbody>
-                        {processedData.map((product: any) => {
-                            const isEditing = editingCode === product.code;
+                        {processedData.length === 0 ? (
+                            <tr>
+                                <td colSpan={6} className="p-8 text-center text-gray-500">
+                                    해당되는 제품이 없습니다.
+                                </td>
+                            </tr>
+                        ) : (
+                            processedData.map((product: any) => {
+                                const isEditing = editingId === product.id;
 
-                            return (
-                                <tr
-                                    key={product.code}
-                                    className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/50 text-gray-700 dark:text-gray-300 divide-x divide-gray-200 dark:divide-gray-700"
-                                >
-                                    {isEditing ? (
-                                        <>
-                                            <td className="p-3">
-                                                <select
-                                                    className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                                    value={editForm.vendor}
-                                                    onChange={(e) =>
-                                                        setEditForm({
-                                                            ...editForm,
-                                                            vendor: e.target
-                                                                .value,
-                                                        })
-                                                    }
-                                                >
-                                                    <option value="">
-                                                        선택
-                                                    </option>
-                                                    <option value="Broadcom">
-                                                        Broadcom
-                                                    </option>
-                                                    <option value="Omnissa">
-                                                        Omnissa
-                                                    </option>
-                                                </select>
-                                            </td>
-                                            <td className="p-4 bg-gray-50 dark:bg-gray-800/50">
-                                                {product.code}
-                                            </td>
-                                            <td className="p-3">
-                                                <input
-                                                    type="text"
-                                                    className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                                    value={editForm.description}
-                                                    onChange={(e) =>
-                                                        setEditForm({
-                                                            ...editForm,
-                                                            description:
-                                                                e.target.value,
-                                                        })
-                                                    }
-                                                />
-                                            </td>
-                                            <td className="p-3">
-                                                <div className="flex items-center justify-end">
-                                                    <span className="mr-1 text-gray-500">
-                                                        $
-                                                    </span>
-                                                    <input
-                                                        type="number"
-                                                        className="w-full max-w-[100px] px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-right"
-                                                        value={editForm.lpd}
+                                return (
+                                    <tr
+                                        key={product.id}
+                                        className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600/50 text-gray-700 dark:text-gray-300 divide-x divide-gray-200 dark:divide-gray-700"
+                                    >
+                                        {isEditing ? (
+                                            <>
+                                                <td className="p-3">
+                                                    <select
+                                                        className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                        value={editForm.vendor}
                                                         onChange={(e) =>
                                                             setEditForm({
                                                                 ...editForm,
-                                                                lpd: Number(
-                                                                    e.target
-                                                                        .value,
-                                                                ),
+                                                                vendor: e.target
+                                                                    .value,
                                                             })
                                                         }
-                                                    />
-                                                </div>
-                                            </td>
-                                            <td className="p-3">
-                                                <div className="flex items-center justify-end">
-                                                    <span className="mr-1 text-gray-500">
-                                                        ₩
-                                                    </span>
+                                                    >
+                                                        <option value="">
+                                                            선택
+                                                        </option>
+                                                        <option value="Broadcom">
+                                                            Broadcom
+                                                        </option>
+                                                        <option value="Omnissa">
+                                                            Omnissa
+                                                        </option>
+                                                    </select>
+                                                </td>
+                                                <td className="p-4 bg-gray-50 dark:bg-gray-800/50 font-mono">
+                                                    {product.code}
+                                                </td>
+                                                <td className="p-3">
                                                     <input
-                                                        type="number"
-                                                        className="w-full max-w-[120px] px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-right"
-                                                        value={editForm.lpw}
+                                                        type="text"
+                                                        className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                                        value={editForm.description}
                                                         onChange={(e) =>
                                                             setEditForm({
                                                                 ...editForm,
-                                                                lpw: Number(
-                                                                    e.target
-                                                                        .value,
-                                                                ),
+                                                                description:
+                                                                    e.target.value,
                                                             })
                                                         }
                                                     />
-                                                </div>
-                                            </td>
-                                            <td className="p-3 text-center space-x-2 whitespace-nowrap">
-                                                <button
-                                                    onClick={() =>
-                                                        handleSave(product.code)
-                                                    }
-                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-600 text-white hover:bg-green-700 h-7 px-2.5 shadow"
-                                                >
-                                                    <Save className="w-3 h-3 mr-1" />{" "}
-                                                    저장
-                                                </button>
-                                                <button
-                                                    onClick={() =>
-                                                        handleDelete(
-                                                            product.code,
-                                                        )
-                                                    }
-                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 bg-red-600 text-white hover:bg-red-700 h-7 px-2.5 shadow"
-                                                >
-                                                    <Trash2 className="w-3 h-3 mr-1" />{" "}
-                                                    삭제
-                                                </button>
-                                                <button
-                                                    onClick={() =>
-                                                        setEditingCode(null)
-                                                    }
-                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-2.5"
-                                                >
-                                                    <X className="w-3 h-3 mr-1" />{" "}
-                                                    취소
-                                                </button>
-                                            </td>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <td className="p-4">
-                                                {product.vendor}
-                                            </td>
-                                            <td className="p-4">
-                                                {product.code}
-                                            </td>
-                                            <td className="p-4">
-                                                {product.description}
-                                            </td>
-                                            <td className="p-4 font-medium text-right">
-                                                ${product.lpd?.toLocaleString()}
-                                            </td>
-                                            <td className="p-4 font-medium text-right">
-                                                ₩{product.lpw?.toLocaleString()}
-                                            </td>
-                                            <td className="p-4 text-center">
-                                                <button
-                                                    onClick={() =>
-                                                        handleEditClick(product)
-                                                    }
-                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-3 shadow-sm"
-                                                >
-                                                    <Edit2 className="w-3 h-3 mr-1" />{" "}
-                                                    수정
-                                                </button>
-                                            </td>
-                                        </>
-                                    )}
-                                </tr>
-                            );
-                        })}
+                                                </td>
+                                                <td className="p-3">
+                                                    <div className="flex items-center justify-end">
+                                                        <span className="mr-1 text-gray-500">
+                                                            $
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            className="w-full max-w-[100px] px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-right"
+                                                            value={editForm.lpd}
+                                                            onChange={(e) =>
+                                                                setEditForm({
+                                                                    ...editForm,
+                                                                    lpd: Number(
+                                                                        e.target
+                                                                            .value,
+                                                                    ),
+                                                                })
+                                                            }
+                                                        />
+                                                    </div>
+                                                </td>
+                                                <td className="p-3">
+                                                    <div className="flex items-center justify-end">
+                                                        <span className="mr-1 text-gray-500">
+                                                            ₩
+                                                        </span>
+                                                        <input
+                                                            type="number"
+                                                            className="w-full max-w-[120px] px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500 text-right"
+                                                            value={editForm.lpw}
+                                                            onChange={(e) =>
+                                                                setEditForm({
+                                                                    ...editForm,
+                                                                    lpw: Number(
+                                                                        e.target
+                                                                            .value,
+                                                                    ),
+                                                                })
+                                                            }
+                                                        />
+                                                    </div>
+                                                </td>
+                                                <td className="p-3 text-center space-x-2 whitespace-nowrap">
+                                                    <button
+                                                        onClick={() =>
+                                                            handleSave(product.id, product.code)
+                                                        }
+                                                        className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-600 text-white hover:bg-green-700 h-7 px-2.5 shadow"
+                                                    >
+                                                        <Save className="w-3 h-3 mr-1" />{" "}
+                                                        저장
+                                                    </button>
+                                                    <button
+                                                        onClick={() =>
+                                                            handleDelete(
+                                                                product.id,
+                                                            )
+                                                        }
+                                                        className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 bg-red-600 text-white hover:bg-red-700 h-7 px-2.5 shadow"
+                                                    >
+                                                        <Trash2 className="w-3 h-3 mr-1" />{" "}
+                                                        삭제
+                                                    </button>
+                                                    <button
+                                                        onClick={() =>
+                                                            setEditingId(null)
+                                                        }
+                                                        className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-2.5"
+                                                    >
+                                                        <X className="w-3 h-3 mr-1" />{" "}
+                                                        취소
+                                                    </button>
+                                                </td>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <td className="p-4">
+                                                    {product.vendor}
+                                                </td>
+                                                <td className="p-4 font-mono">
+                                                    {product.code}
+                                                </td>
+                                                <td className="p-4">
+                                                    {product.description}
+                                                </td>
+                                                <td className="p-4 font-medium text-right text-gray-900 dark:text-white">
+                                                    ${product.lpd?.toLocaleString()}
+                                                </td>
+                                                <td className="p-4 font-medium text-right text-gray-900 dark:text-white">
+                                                    ₩{product.lpw?.toLocaleString()}
+                                                </td>
+                                                <td className="p-4 text-center">
+                                                    {product.available === 1 ? (
+                                                        <button
+                                                            onClick={() =>
+                                                                handleEditClick(product)
+                                                            }
+                                                            className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-3 shadow-sm"
+                                                        >
+                                                            <Edit2 className="w-3 h-3 mr-1" />{" "}
+                                                            수정
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            onClick={() =>
+                                                                handleRestore(product.id)
+                                                            }
+                                                            className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-50 text-green-700 hover:bg-green-100 dark:bg-green-950/40 dark:text-green-300 dark:hover:bg-green-900/40 border border-green-200 dark:border-green-800 h-7 px-3 shadow-sm"
+                                                        >
+                                                            <CheckCircle2 className="w-3 h-3 mr-1" />{" "}
+                                                            복구
+                                                        </button>
+                                                    )}
+                                                </td>
+                                            </>
+                                        )}
+                                    </tr>
+                                );
+                            })
+                        )}
                     </tbody>
                 </table>
             </div>

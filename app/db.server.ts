@@ -1,13 +1,10 @@
 import Database from "better-sqlite3";
 
-// const db = new Database(":memory:");
 const db = new Database("appdata.db");
 
 // 외래키(Foreign Key) 제약 조건을 활성화합니다. (SQLite는 기본적으로 꺼져있으므로 필수입니다)
 db.pragma("foreign_keys = ON");
 
-// 동시성(Concurrency) 성능 향상을 위해 WAL 모드를 활성화합니다. (읽기/쓰기 동시 접근 성능 대폭 향상)
-// db.pragma("journal_mode = WAL");
 // WAL 모드를 끄고 SQLite의 기본 모드(DELETE)로 되돌립니다.
 db.pragma("journal_mode = DELETE");
 
@@ -60,15 +57,17 @@ db.exec(`
 // 5. 제품 테이블 생성
 db.exec(`
   CREATE TABLE IF NOT EXISTS products (
-    code TEXT PRIMARY KEY, -- 제품코드 (고유 식별자)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT UNIQUE NOT NULL, -- 제품코드 (고유 식별자)
     description TEXT,
-    lpd REAL, -- LP 달러(가격, 소수점이 있을 수 있으므로 REAL 사용)
+    lpd REAL, -- LP 달러
     lpw REAL, -- LP 원화
-    vendor TEXT -- 벤더
+    vendor TEXT, -- 벤더
+    available INTEGER DEFAULT 1 -- 사용 가능 여부 (1: 가능, 0: 불가능/삭제됨)
   );
 `);
 
-// 프로젝트(견적관리)를 위한 quotes 테이블 생성
+// 6. 프로젝트(견적관리)를 위한 quotes 테이블 생성
 db.exec(` 
   CREATE TABLE IF NOT EXISTS quotes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,21 +82,18 @@ db.exec(`
     
     project_name TEXT, -- 사업명
     quote_type INTEGER, -- 계산 기준 (0: PPC, 1: DC/마진)
-    products TEXT, -- 제품 정보 (JSON 배열 문자열로 저장)
-    created_at INTEGER, -- 기입날짜 (Unix timestamp 등)
-    updated_at INTEGER, -- 마지막수정날짜 (Unix timestamp 등)
+    created_at INTEGER, -- 기입날짜 (Unix timestamp)
+    updated_at INTEGER, -- 마지막수정날짜 (Unix timestamp)
     am_id INTEGER, -- AM 테이블 연결 id
     dist_contact_id INTEGER, -- 총판 담당자 테이블 연결 id
     contract_type TEXT, -- 계약방식
     deal_flow TEXT, -- dealflow
-    expected_quarter TEXT, -- 예상 분기
-    stage INTEGER, -- 단계
+    stage INTEGER DEFAULT 10, -- 단계 (기본값: 10%)
     note TEXT, -- 비고
     is_ordered INTEGER DEFAULT 0, -- 주문 여부
     is_lost INTEGER DEFAULT 0, -- 실주 여부
-    vendor TEXT, -- 벤더
+    products_history TEXT, -- 이력 관리
     
-    -- 외래키(Foreign Key) 지정으로 데이터 무결성을 보장합니다.
     FOREIGN KEY (partner_id) REFERENCES partners(id),
     FOREIGN KEY (partner_contact_id) REFERENCES partner_contacts(id),
     FOREIGN KEY (am_id) REFERENCES ams(id),
@@ -105,148 +101,59 @@ db.exec(`
   );
 `);
 
-// 데이터가 없으면 초기 샘플 데이터를 넣습니다.
-db.transaction(() => {
-    const amCount = db.prepare("SELECT COUNT(*) AS count FROM ams").get() as {
-        count: number;
-    };
-    if (amCount.count === 0) {
-        const insert = db.prepare(
-            "INSERT INTO ams (name, position, job_type, email, phone, vendor) VALUES (?, ?, ?, ?, ?, ?)",
-        );
-        insert.run(
-            "테스트AM",
-            "차장",
-            "영업",
-            "st.te@example.com",
-            "010-1111-2222",
-            "Broadcom",
-        );
-    }
+// 7. 견적 내 제품 그룹(탭) 정보 테이블 생성
+db.exec(`
+  CREATE TABLE IF NOT EXISTS quote_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER NOT NULL,
+    name TEXT NOT NULL, -- 그룹 이름 (예: '원가표1')
+    uuid TEXT UNIQUE NOT NULL, -- 클라이언트 식별용 UUID
+    "default" INTEGER DEFAULT 0, -- 기본 여부 (1: 기본, 0: 일반)
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE
+  );
+`);
 
-    const partnerCount = db
-        .prepare("SELECT COUNT(*) AS count FROM partners")
-        .get() as { count: number };
-    if (partnerCount.count === 0) {
-        const insert = db.prepare(
-            "INSERT INTO partners (name, grade) VALUES (?, ?)",
-        );
-        insert.run("테스트파트너", "pinacle");
-    }
+// 8. 각 그룹에 속한 견적 라인(품목) 상세 테이블 생성
+db.exec(`
+  CREATE TABLE IF NOT EXISTS quote_lines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    line_number INTEGER NOT NULL, -- 정렬 순서
+    product_id INTEGER, -- 제품 테이블 연결 id
+    description TEXT, -- 제품 상세 설명
+    lpd REAL DEFAULT 0,
+    lpw REAL DEFAULT 0,
+    quantity INTEGER DEFAULT 1,
+    period INTEGER DEFAULT 1,
+    dc_usd REAL DEFAULT 0,
+    exchange_rate REAL DEFAULT 0,
+    dc_krw REAL DEFAULT 0,
+    supply_price REAL DEFAULT 0,
+    margin REAL DEFAULT 0,
+    margin_rate REAL DEFAULT 0,
+    year INTEGER DEFAULT 1, -- 매출년 (기존 년차)
+    krw_ppc REAL DEFAULT 0,
+    month INTEGER DEFAULT 1, -- 매출월 (1~12)
+    stage INTEGER DEFAULT 10, -- 라인별 단계 (기본값: 10%)
+    FOREIGN KEY (group_id) REFERENCES quote_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON UPDATE CASCADE ON DELETE SET NULL
+  );
+`);
 
-    const partnerContactCount = db
-        .prepare("SELECT COUNT(*) AS count FROM partner_contacts")
-        .get() as { count: number };
-    if (partnerContactCount.count === 0) {
-        const insert = db.prepare(
-            "INSERT INTO partner_contacts (partner_id, name, position, email, phone) VALUES (?, ?, ?, ?, ?)",
-        );
-        insert.run(
-            1,
-            "테스트파트너담당자",
-            "과장",
-            "st.te@example.com",
-            "010-3333-4444",
-        );
-    }
+// 9. 견적 다중 벤더 매핑 테이블 생성
+db.exec(`
+  CREATE TABLE IF NOT EXISTS quote_vendors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_id INTEGER NOT NULL,
+    vendor TEXT NOT NULL,
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE
+  );
+`);
 
-    const productCount = db
-        .prepare("SELECT COUNT(*) AS count FROM products")
-        .get() as { count: number };
-    if (productCount.count === 0) {
-        const insert = db.prepare(
-            "INSERT INTO products (code, description, lpd, lpw, vendor) VALUES (?, ?, ?, ?, ?)",
-        );
-        insert.run("VCF-CLD-TEST", "test license", 1000, 3000000, "Broadcom");
-    }
-
-    const distContactCount = db
-        .prepare("SELECT COUNT(*) AS count FROM dist_contacts")
-        .get() as { count: number };
-    if (distContactCount.count === 0) {
-        const insert = db.prepare(
-            "INSERT INTO dist_contacts (name, position) VALUES (?, ?)",
-        );
-        insert.run("테스트총판", "부장");
-    }
-
-    const quoteCount = db
-        .prepare("SELECT COUNT(*) AS count FROM quotes")
-        .get() as { count: number };
-    if (quoteCount.count === 0) {
-        const insert = db.prepare(`
-            INSERT INTO quotes (
-                client_company, client_contact_name, client_contact_email, client_contact_phone, partner_id, 
-                partner_contact_id, project_name, quote_type, products, created_at, updated_at, 
-                am_id, dist_contact_id, contract_type, deal_flow, expected_quarter, stage, note, vendor
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        // JSON 형식으로 들어갈 제품 목록 데이터 생성
-        const sampleProducts = JSON.stringify([
-            {
-                제품코드: "VCF-CLD-TEST",
-                수량: 100,
-                기간: 1,
-                달러원가: 1000,
-                DC달러: 50,
-                달러net: 500,
-                환율: 1500,
-                원화net: 750000,
-                DC원화: 50,
-                소비자가: 3000000,
-                PPC: 15000,
-                공급가: 1500000,
-                마진: 750000,
-                년차: 1,
-                재견적: 0,
-            },
-            {
-                제품코드: "VCF-CLD-TEST",
-                수량: 100,
-                기간: 3,
-                달러원가: 3000,
-                DC달러: 50,
-                달러net: 1500,
-                환율: 1500,
-                원화net: 2250000,
-                DC원화: 50,
-                소비자가: 9000000,
-                PPC: 15000,
-                공급가: 4500000,
-                마진: 2250000,
-                년차: 1,
-                재견적: 0,
-            },
-        ]);
-
-        const dealflow = JSON.stringify(["파트너사", "고객사"]);
-        const note = JSON.stringify(["nutanix 비딩"]);
-        // Unix 타임스탬프 (밀리초 단위의 정수)
-        const now = Date.now();
-
-        insert.run(
-            "테스트고객사",
-            "테스트고객사담당자",
-            "st.te@example.com",
-            "010-55555-6666",
-            1,
-            1,
-            "차세대인프라",
-            1,
-            sampleProducts, // JSON.stringify()로 변환된 문자열
-            now, // created_at
-            now, // updated_at
-            1,
-            1, // dist_contact_id
-            "일반경쟁",
-            dealflow,
-            "FY26Q3",
-            2,
-            note,
-            "Broadcom",
-        );
-    }
-})();
+// 인덱스 생성
+db.exec(`CREATE INDEX IF NOT EXISTS idx_quote_groups_quote_id ON quote_groups(quote_id);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_quote_lines_group_id ON quote_lines(group_id);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_quote_lines_product_id ON quote_lines(product_id);`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_quote_vendors_quote_id ON quote_vendors(quote_id);`);
 
 export default db;

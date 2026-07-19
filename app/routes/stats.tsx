@@ -114,10 +114,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     const vendorStats = db
         .prepare(
             `
-        SELECT q.vendor as vendor_name, COUNT(q.id) as quote_count
+        SELECT qv.vendor as vendor_name, COUNT(q.id) as quote_count
         FROM quotes q
-        WHERE ${timeFilter} AND q.vendor IS NOT NULL AND q.vendor != ''
-        GROUP BY q.vendor
+        JOIN quote_vendors qv ON q.id = qv.quote_id
+        WHERE ${timeFilter} AND qv.vendor IS NOT NULL AND qv.vendor != ''
+        GROUP BY qv.vendor
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
@@ -128,11 +129,12 @@ export async function loader({ request }: Route.LoaderArgs) {
     const amStats = db
         .prepare(
             `
-        SELECT q.vendor as vendor_name, a.id as am_id, a.name as am_name, COUNT(q.id) as quote_count
+        SELECT qv.vendor as vendor_name, a.id as am_id, a.name as am_name, COUNT(q.id) as quote_count
         FROM quotes q
         JOIN ams a ON q.am_id = a.id
-        WHERE ${timeFilter} AND q.vendor IS NOT NULL AND q.vendor != ''
-        GROUP BY q.vendor, a.id, a.name
+        JOIN quote_vendors qv ON q.id = qv.quote_id
+        WHERE ${timeFilter} AND qv.vendor IS NOT NULL AND qv.vendor != ''
+        GROUP BY qv.vendor, a.id, a.name
         HAVING quote_count > 0
         ORDER BY quote_count DESC
     `,
@@ -146,11 +148,20 @@ export async function loader({ request }: Route.LoaderArgs) {
         return acc;
     }, {});
 
-    // 7. 대시보드 요약 지표 및 월별 매출 추이 계산을 위한 전체 데이터 조회
+    // 7. 대시보드 요약 지표 및 월별 매출 추이 계산을 위한 전체 데이터 조회 (SQL SUM 최적화)
     const rawQuotes = db
         .prepare(
             `
-        SELECT q.products, q.created_at, q.updated_at, q.is_ordered, q.is_lost
+        SELECT 
+            q.id,
+            q.created_at,
+            q.updated_at,
+            q.is_ordered,
+            q.is_lost,
+            (SELECT IFNULL(SUM(l.supply_price), 0)
+             FROM quote_groups g
+             JOIN quote_lines l ON g.id = l.group_id
+             WHERE g.quote_id = q.id AND g."default" = 1) as total_supply_price
         FROM quotes q
         WHERE ${timeFilter}
     `,
@@ -164,29 +175,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const monthlyDataMap: Record<string, any> = {};
 
     rawQuotes.forEach((q) => {
-        let revenue = 0;
-        try {
-            const parsed = JSON.parse(q.products || "[]");
-            if (Array.isArray(parsed)) {
-                revenue = parsed.reduce(
-                    (sum: number, p: any) => sum + (Number(p.공급가) || 0),
-                    0,
-                );
-            } else {
-                revenue = Object.values(parsed).reduce(
-                    (sum: number, groupProds: any) =>
-                        sum +
-                        (Array.isArray(groupProds)
-                            ? groupProds.reduce(
-                                  (gSum: number, p: any) =>
-                                      gSum + (Number(p.공급가) || 0),
-                                  0,
-                              )
-                            : 0),
-                    0,
-                );
-            }
-        } catch (e) {}
+        const revenue = q.total_supply_price || 0;
 
         // 오더된 건들(is_ordered === 1)에 대해서만 총 공급가 및 매출 추이 계산
         if (q.is_ordered) {

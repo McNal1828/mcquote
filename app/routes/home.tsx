@@ -1,5 +1,7 @@
-import { useState, Fragment, useEffect } from "react";
+import { useState, Fragment, useEffect, useRef } from "react";
 import { useFetcher, useSearchParams, Link } from "react-router";
+import { getFinalProducts, calculateReverseDCWon, normalizeProducts } from "~/utils/calculator";
+import DetailedCostTable from "~/components/DetailedCostTable";
 import type { Route } from "./+types/home";
 import db from "../db.server";
 import {
@@ -710,40 +712,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 }
             }
 
-            // 역산 로직 추가 (원화PPC 또는 마진율 변경 시 DC원화 재계산)
+            // 공통 역산 계산 유틸 호출
             if (field === "원화PPC" || field === "마진율") {
-                const lpd = Number(updatedProduct.lpd) || 0;
-                const lpw = Number(updatedProduct.lpw) || 0;
-                const qty = Number(updatedProduct.수량) || 0;
-                const period = Number(updatedProduct.기간) || 0;
-                const dcDollar = Number(updatedProduct.DC달러) || 0;
-                const exchangeRate = Number(updatedProduct.환율) || 0;
-                const baseTotalLpw = lpw * qty * period;
-
-                if (baseTotalLpw > 0) {
-                    let targetSupply: number | null = null;
-                    if (field === "원화PPC") {
-                        targetSupply = (Number(value) || 0) * qty * period;
-                    } else if (field === "마진율") {
-                        const inputMarginPercent = Number(value) || 0;
-                        if (inputMarginPercent < 100) {
-                            const dollarPpc = lpd * (1 - dcDollar / 100);
-                            const wonNet =
-                                dollarPpc * qty * period * exchangeRate;
-                            targetSupply =
-                                Math.round(
-                                    wonNet /
-                                        (1 - inputMarginPercent / 100) /
-                                        1000,
-                                ) * 1000;
-                        }
-                    }
-                    if (targetSupply !== null) {
-                        const rawDcWon =
-                            (1 - targetSupply / baseTotalLpw) * 100;
-                        updatedProduct.DC원화 =
-                            Math.trunc(rawDcWon * 100) / 100;
-                    }
+                const calculatedDcWon = calculateReverseDCWon(field, value, updatedProduct);
+                if (calculatedDcWon !== null) {
+                    updatedProduct.DC원화 = calculatedDcWon;
                 }
             }
 
@@ -1558,201 +1531,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         </div>
                                                                     </div>
 
-                                                                    <div className="overflow-x-auto rounded-md border border-gray-200 dark:border-gray-700">
-                                                                        <table className="w-full text-sm text-left table-fixed min-w-[1300px]">
-                                                                            <thead className="bg-gray-50 dark:bg-gray-800/80 text-gray-700 dark:text-gray-300 border-b dark:border-gray-700 whitespace-nowrap">
-                                                                                <tr className="divide-x divide-gray-200 dark:divide-gray-700">
-                                                                                    <th className="p-2 font-semibold w-40">제품코드</th>
-                                                                                    <th className="p-2 font-semibold text-center w-20">수량</th>
-                                                                                    <th className="p-2 font-semibold text-center w-20">기간</th>
-                                                                                    <th className="p-2 font-semibold text-center w-20">DC달러(%)</th>
-                                                                                    <th className="p-2 font-semibold text-right w-28">달러PPC</th>
-                                                                                    <th className="p-2 font-semibold text-center w-28">달러net($)</th>
-                                                                                    <th className="p-2 font-semibold text-center w-24">환율(₩)</th>
-                                                                                    <th className="p-2 font-semibold text-center w-32">원화PPC(₩)</th>
-                                                                                    <th className="p-2 font-semibold text-center w-24">DC원화(%)</th>
-                                                                                    <th className="p-2 font-semibold text-center w-32">공급가(₩)</th>
-                                                                                    <th className="p-2 font-semibold text-center w-32">마진(₩)</th>
-                                                                                    <th className="p-2 font-semibold text-right w-28">마진%</th>
-                                                                                    <th className="p-2 font-semibold text-center w-20">년차</th>
-                                                                                    {isEditing && <th className="p-2 font-semibold text-center w-16">관리</th>}
-                                                                                </tr>
-                                                                            </thead>
-                                                                            <tbody>
-                                                                                {finalProds.map((calcProd: any, idx: number) => {
-                                                                                    const rawProd = (groupProducts as any[])[idx];
-                                                                                    if (!rawProd) return null;
-
-                                                                                    return (
-                                                                                        <tr
-                                                                                            key={idx}
-                                                                                            className="border-b last:border-b-0 border-gray-200 dark:border-gray-600 hover:!bg-blue-100 dark:hover:!bg-gray-600 divide-x divide-gray-200 dark:divide-gray-600"
-                                                                                        >
-                                                                                            <td className="p-2">
-                                                                                                {isEditing ? (
-                                                                                                    <select
-                                                                                                        value={rawProd.제품코드}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "제품코드", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm"
-                                                                                                    >
-                                                                                                        <option value="">제품 선택</option>
-                                                                                                        {loaderData.masterProducts
-                                                                                                            .filter((p: any) => !quote.vendor || p.vendor === quote.vendor)
-                                                                                                            .map((p: any) => (
-                                                                                                                <option key={p.code} value={p.code}>
-                                                                                                                    {p.code} - {p.description}{" "}
-                                                                                                                    {p.vendor && !quote.vendor ? ` [${p.vendor}]` : ""}
-                                                                                                                </option>
-                                                                                                            ))}
-                                                                                                    </select>
-                                                                                                ) : (
-                                                                                                    <span className="px-2">{calcProd.제품코드}</span>
-                                                                                                )}
-                                                                                            </td>
-                                                                                            <td className="p-2">
-                                                                                                {isEditing ? (
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        value={rawProd.수량}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "수량", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
-                                                                                                    />
-                                                                                                ) : (
-                                                                                                    <div className="text-right px-2">{calcProd.수량}</div>
-                                                                                                )}
-                                                                                            </td>
-                                                                                            <td className="p-2">
-                                                                                                {isEditing ? (
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        value={rawProd.기간}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "기간", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center"
-                                                                                                    />
-                                                                                                ) : (
-                                                                                                    <div className="text-center px-2">{calcProd.기간}</div>
-                                                                                                )}
-                                                                                            </td>
-                                                                                            <td className="p-2">
-                                                                                                {isEditing ? (
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        step="any"
-                                                                                                        value={rawProd.DC달러}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "DC달러", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
-                                                                                                    />
-                                                                                                ) : (
-                                                                                                    <div className="text-right px-2">{calcProd.DC달러}%</div>
-                                                                                                )}
-                                                                                            </td>
-                                                                                            <td className="p-2 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                ${Number(calcProd.달러PPC).toLocaleString(undefined, {
-                                                                                                    minimumFractionDigits: 2,
-                                                                                                    maximumFractionDigits: 2,
-                                                                                                })}
-                                                                                            </td>
-                                                                                            <td className="p-2 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                ${Number(calcProd.달러net).toLocaleString(undefined, {
-                                                                                                    minimumFractionDigits: 2,
-                                                                                                    maximumFractionDigits: 2,
-                                                                                                })}
-                                                                                            </td>
-                                                                                            <td className="p-2">
-                                                                                                {isEditing ? (
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        step="any"
-                                                                                                        value={rawProd.환율}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "환율", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
-                                                                                                    />
-                                                                                                ) : (
-                                                                                                    <div className="text-right px-2">₩{Number(calcProd.환율).toLocaleString()}</div>
-                                                                                                )}
-                                                                                            </td>
-                                                                                            {isEditing && currentMode === "PPC" ? (
-                                                                                                <td className="p-2">
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        value={rawProd.원화PPC !== undefined ? rawProd.원화PPC : calcProd.원화PPC}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "원화PPC", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-medium"
-                                                                                                    />
-                                                                                                </td>
-                                                                                            ) : (
-                                                                                                <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                    {Number(calcProd.원화PPC).toLocaleString()}
-                                                                                                </td>
-                                                                                            )}
-                                                                                            {isEditing && currentMode === "DC" ? (
-                                                                                                <td className="p-2">
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        step="any"
-                                                                                                        value={rawProd.DC원화}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "DC원화", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
-                                                                                                    />
-                                                                                                </td>
-                                                                                            ) : (
-                                                                                                <td className="p-2 text-right text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                    {calcProd.DC원화}%
-                                                                                                </td>
-                                                                                            )}
-                                                                                            <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                ₩{Number(calcProd.공급가).toLocaleString()}
-                                                                                            </td>
-                                                                                            <td className="p-2 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                ₩{Math.round(Number(calcProd.마진)).toLocaleString()}
-                                                                                            </td>
-                                                                                            {isEditing && currentMode === "MARGIN" ? (
-                                                                                                <td className="p-2">
-                                                                                                    <div className="flex items-center">
-                                                                                                        <input
-                                                                                                            type="number"
-                                                                                                            step="any"
-                                                                                                            value={rawProd.마진율 !== undefined ? rawProd.마진율 : calcProd.마진율}
-                                                                                                            onChange={(e) => handleProductChange(groupName, idx, "마진율", e.target.value)}
-                                                                                                            className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-bold text-blue-600 dark:text-blue-400"
-                                                                                                        />
-                                                                                                        <span className="ml-1 text-blue-600 dark:text-blue-400 font-bold">%</span>
-                                                                                                    </div>
-                                                                                                </td>
-                                                                                            ) : (
-                                                                                                <td className="p-2 text-right font-bold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/50">
-                                                                                                    {calcProd.마진율}%
-                                                                                                </td>
-                                                                                            )}
-                                                                                            <td className="p-2">
-                                                                                                {isEditing ? (
-                                                                                                    <input
-                                                                                                        type="number"
-                                                                                                        value={rawProd.년차}
-                                                                                                        onChange={(e) => handleProductChange(groupName, idx, "년차", e.target.value)}
-                                                                                                        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center"
-                                                                                                    />
-                                                                                                ) : (
-                                                                                                    <div className="text-center px-2">{calcProd.년차}</div>
-                                                                                                )}
-                                                                                            </td>
-                                                                                            {isEditing && (
-                                                                                                <td className="p-2 text-center">
-                                                                                                    <button
-                                                                                                        type="button"
-                                                                                                        onClick={() => handleRemoveProduct(groupName, idx)}
-                                                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8"
-                                                                                                    >
-                                                                                                        <Trash2 className="w-4 h-4" />
-                                                                                                    </button>
-                                                                                                </td>
-                                                                                            )}
-                                                                                        </tr>
-                                                                                    );
-                                                                                })}
-                                                                            </tbody>
-                                                                        </table>
-                                                                    </div>
+                                                                    <DetailedCostTable
+                                                                        groupName={groupName}
+                                                                        rawProducts={groupProducts as any[]}
+                                                                        calcProducts={finalProds}
+                                                                        isEditing={isEditing}
+                                                                        calcMode={currentMode}
+                                                                        masterProducts={loaderData.masterProducts}
+                                                                        vendorFilter={quote.vendor}
+                                                                        onProductChange={handleProductChange}
+                                                                        onRemoveProduct={handleRemoveProduct}
+                                                                    />
                                                                     {(groupProducts as any[]).length === 0 && (
                                                                         <div className="p-6 text-center text-gray-500 dark:text-gray-400">
                                                                             추가된 제품이 없습니다.

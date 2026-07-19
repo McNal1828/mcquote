@@ -1,6 +1,8 @@
 import { useState, Fragment } from "react";
 import { Link } from "react-router";
 import db from "../db.server";
+import { getFinalProducts, normalizeProducts } from "~/utils/calculator";
+import DetailedCostTable from "~/components/DetailedCostTable";
 import type { Route } from "./+types/history";
 import {
     ArrowLeft,
@@ -9,14 +11,14 @@ import {
     FileText,
     Building2,
     Users,
-    UserCheck,
+    UserCircle,
     Layers,
 } from "lucide-react";
 
 // loader to fetch the quote metadata and database history
 export async function loader({ params }: Route.LoaderArgs) {
     const id = params.id;
-    const quote = db.prepare("SELECT * FROM quotes WHERE id = ?").get(id) as any;
+    const quote = db.prepare("SELECT *, (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = quotes.id) as vendor FROM quotes WHERE id = ?").get(id) as any;
     if (!quote) {
         throw new Response("견적을 찾을 수 없습니다.", { status: 404 });
     }
@@ -24,97 +26,29 @@ export async function loader({ params }: Route.LoaderArgs) {
     const partnerName = quote.partner_id
         ? (db.prepare("SELECT name FROM partners WHERE id = ?").get(quote.partner_id) as any)?.name
         : "";
+    const partnerContactName = quote.partner_contact_id
+        ? (db.prepare("SELECT name FROM partner_contacts WHERE id = ?").get(quote.partner_contact_id) as any)?.name
+        : "";
     const amName = quote.am_id
         ? (db.prepare("SELECT name FROM ams WHERE id = ?").get(quote.am_id) as any)?.name
         : "";
+    const distContactName = quote.dist_contact_id
+        ? (db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(quote.dist_contact_id) as any)?.name
+        : "";
 
-    return { quote, partnerName, amName };
-}
-
-// helper calculation logic to reconstruct unit prices and margins for older revisions
-function getFinalProducts(
-    productsToProcess: any[] | Record<string, any[]>,
-    currentMode: string,
-): any {
-    if (Array.isArray(productsToProcess)) {
-        return productsToProcess.map((prod) => {
-            const lpd = Number(prod.lpd) || 0;
-            const lpw = Number(prod.lpw) || 0;
-            const qty = Number(prod.수량) || 0;
-            const period = Number(prod.기간) || 0;
-            const dcDollar = Number(prod.DC달러) || 0;
-            const exchangeRate = Number(prod.환율) || 0;
-            let dcWon = Number(prod.DC원화) || 0;
-
-            const dollarPpc = lpd * (1 - dcDollar / 100);
-            const dollarCost = lpd * qty * period;
-            const dollarNet = dollarPpc * qty * period;
-            const wonNet = dollarNet * exchangeRate;
-
-            const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
-            let supplyPrice = 0;
-
-            if (currentMode === "PPC" && prod.원화PPC !== undefined) {
-                supplyPrice = Number(prod.원화PPC) * qty * period;
-            } else if (currentMode === "MARGIN" && prod.마진율 !== undefined) {
-                const inputMarginPercent = Number(prod.마진율);
-                let tempSupply = 0;
-                if (inputMarginPercent < 100) {
-                    tempSupply =
-                        Math.round(
-                            wonNet / (1 - inputMarginPercent / 100) / 1000,
-                        ) * 1000;
-                }
-                const baseTotalLpw = lpw * qty * period;
-                if (baseTotalLpw > 0) {
-                    const rawDcWon = (1 - tempSupply / baseTotalLpw) * 100;
-                    dcWon = Math.trunc(rawDcWon * 100) / 100;
-                }
-
-                const discountedUnitLpw =
-                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
-                supplyPrice = discountedUnitLpw * qty;
-            } else {
-                const discountedUnitLpw =
-                    Math.round((baseUnitLpw * (1 - dcWon / 100)) / 1000) * 1000;
-                supplyPrice = discountedUnitLpw * qty;
-            }
-
-            const wonPpc = qty * period > 0 ? supplyPrice / (qty * period) : 0;
-            const margin = supplyPrice - wonNet;
-            const marginPercent = supplyPrice
-                ? ((margin / supplyPrice) * 100).toFixed(1)
-                : "0.0";
-
-            return {
-                ...prod,
-                DC원화: dcWon,
-                달러PPC: dollarPpc,
-                달러원가: dollarCost,
-                달러net: dollarNet,
-                공급가: supplyPrice,
-                마진: margin,
-                원화PPC:
-                    currentMode === "PPC" && prod.원화PPC !== undefined
-                        ? prod.원화PPC
-                        : Math.round(wonPpc),
-                마진율:
-                    currentMode === "MARGIN" && prod.마진율 !== undefined
-                        ? prod.마진율
-                        : marginPercent,
-            };
-        });
-    } else {
-        const processed: Record<string, any[]> = {};
-        for (const [groupName, prods] of Object.entries(productsToProcess)) {
-            processed[groupName] = getFinalProducts(prods, currentMode);
-        }
-        return processed;
+    let dealFlowList: string[] = [];
+    try {
+        dealFlowList = JSON.parse(quote.deal_flow || "[]");
+        if (!Array.isArray(dealFlowList)) dealFlowList = [];
+    } catch (e) {
+        dealFlowList = [];
     }
+
+    return { quote, partnerName, partnerContactName, amName, distContactName, dealFlowList };
 }
 
 export default function HistoryView({ loaderData }: Route.ComponentProps) {
-    const { quote, partnerName, amName } = loaderData;
+    const { quote, partnerName, partnerContactName, amName, distContactName, dealFlowList } = loaderData;
 
     // Parse the products history array
     let historyList: Array<Record<string, any>> = [];
@@ -156,28 +90,58 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                     </div>
                 </div>
 
-                {/* Quote Information Summary Card */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm">
+                {/* Quote Information Summary Card - quoting.tsx 레이아웃과 동일 */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 bg-white dark:bg-gray-800 p-6 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm">
+                    {/* 고객사 정보 */}
                     <div className="space-y-3">
                         <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-2">
-                            <Building2 className="w-4 h-4" /> 고객 및 프로젝트 정보
+                            <Building2 className="w-4 h-4" /> 고객사 정보
                         </h3>
                         <div className="space-y-1 sm:space-y-1.5 text-sm">
-                            <p><span className="text-gray-500 dark:text-gray-400">고객사:</span> <strong>{quote.client_company || "-"}</strong></p>
-                            <p><span className="text-gray-500 dark:text-gray-400">담당자:</span> {quote.client_contact_name || "-"} {quote.client_contact_email && `(${quote.client_contact_email})`}</p>
+                            <p><span className="text-gray-500 dark:text-gray-400">고객사명:</span> <strong>{quote.client_company || "-"}</strong></p>
+                            <p><span className="text-gray-500 dark:text-gray-400">담당자 이름:</span> {quote.client_contact_name || "-"}</p>
+                            <p><span className="text-gray-500 dark:text-gray-400">이메일:</span> {quote.client_contact_email || "-"}</p>
                             <p><span className="text-gray-500 dark:text-gray-400">연락처:</span> {quote.client_contact_phone || "-"}</p>
                         </div>
                     </div>
+
+                    {/* 담당자 정보 */}
                     <div className="space-y-3">
                         <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-2">
-                            <Users className="w-4 h-4" /> 파트너 및 벤더
+                            <Users className="w-4 h-4" /> 담당자 정보
                         </h3>
                         <div className="space-y-1 sm:space-y-1.5 text-sm">
-                            <p><span className="text-gray-500 dark:text-gray-400">파트너사:</span> <strong>{partnerName || "-"}</strong></p>
-                            <p><span className="text-gray-500 dark:text-gray-400">제조사 AM:</span> {amName || quote.vendor || "-"}</p>
-                            <p><span className="text-gray-500 dark:text-gray-400">계약 종류:</span> {quote.contract_type || "-"}</p>
+                            <p><span className="text-gray-500 dark:text-gray-400">파트너사명:</span> <strong>{partnerName || "-"}</strong></p>
+                            <p><span className="text-gray-500 dark:text-gray-400">담당자 이름:</span> {partnerContactName || "-"}</p>
+                            <p><span className="text-gray-500 dark:text-gray-400">총판 담당자:</span> {distContactName || "-"}</p>
+                            <p><span className="text-gray-500 dark:text-gray-400">담당AM:</span> {amName || quote.vendor || "-"}</p>
                         </div>
                     </div>
+
+                    {/* 영업 정보 */}
+                    <div className="space-y-3">
+                        <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                            <UserCircle className="w-4 h-4" /> 영업 정보
+                        </h3>
+                        <div className="space-y-1 sm:space-y-1.5 text-sm">
+                            <p><span className="text-gray-500 dark:text-gray-400">계약방식:</span> {quote.contract_type || "-"}</p>
+                            <p><span className="text-gray-500 dark:text-gray-400">벤더:</span> {quote.vendor || "-"}</p>
+
+                            <div>
+                                <span className="text-gray-500 dark:text-gray-400">Deal Flow:</span>
+                                <div className="mt-1 flex flex-wrap items-center gap-1">
+                                    {dealFlowList.map((flow, idx) => (
+                                        <Fragment key={idx}>
+                                            {idx > 0 && <span className="text-gray-400 text-xs">➤</span>}
+                                            <span className="text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{flow}</span>
+                                        </Fragment>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 현재 상태 */}
                     <div className="space-y-3">
                         <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400 flex items-center gap-2">
                             <Layers className="w-4 h-4" /> 현재 상태
@@ -276,21 +240,23 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                                             </div>
                                                         ) : (
                                                             <div className="overflow-x-auto border border-gray-200 dark:border-gray-750 rounded-lg">
-                                                                <table className="w-full text-xs text-left">
+                                                                <table className="w-full text-xs text-left border-collapse">
                                                                     <thead className="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-400 uppercase divide-y divide-gray-250 dark:divide-gray-750">
                                                                         <tr className="divide-x divide-gray-200 dark:divide-gray-750">
+                                                                            <th className="p-2 font-semibold text-center w-16">매출년</th>
+                                                                            <th className="p-2 font-semibold text-center w-16">매출월</th>
                                                                             <th className="p-2 font-semibold text-center w-28">제품코드</th>
                                                                             <th className="p-2 font-semibold text-center w-12">수량</th>
                                                                             <th className="p-2 font-semibold text-center w-12">기간</th>
-                                                                            <th className="p-2 font-semibold text-right w-20">LPD($)</th>
-                                                                            <th className="p-2 font-semibold text-right w-20">LPW(₩)</th>
                                                                             <th className="p-2 font-semibold text-center w-20">DC달러(%)</th>
-                                                                            <th className="p-2 font-semibold text-right w-16">환율</th>
+                                                                            <th className="p-2 font-semibold text-right w-24">달러PPC($)</th>
+                                                                            <th className="p-2 font-semibold text-right w-24">달러net($)</th>
+                                                                            <th className="p-2 font-semibold text-right w-20">환율(₩)</th>
+                                                                            <th className="p-2 font-semibold text-right w-28">원화PPC(₩)</th>
                                                                             <th className="p-2 font-semibold text-center w-20">DC원화(%)</th>
                                                                             <th className="p-2 font-semibold text-center w-28">공급가(₩)</th>
                                                                             <th className="p-2 font-semibold text-center w-28">마진(₩)</th>
-                                                                            <th className="p-2 font-semibold text-right w-20">마진%</th>
-                                                                            <th className="p-2 font-semibold text-center w-12">년차</th>
+                                                                            <th className="p-2 font-semibold text-right w-20 border-r border-gray-200 dark:border-gray-750">마진%</th>
                                                                         </tr>
                                                                     </thead>
                                                                     <tbody className="divide-y divide-gray-200 dark:divide-gray-750">
@@ -299,18 +265,27 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                                                                 key={idx}
                                                                                 className="border-b last:border-b-0 border-gray-200 dark:border-gray-750 hover:bg-gray-50 dark:hover:bg-gray-900/50 divide-x divide-gray-200 dark:divide-gray-750"
                                                                             >
+                                                                                <td className="p-2 text-center">
+                                                                                    {calcProd.년차 !== undefined ? calcProd.년차 : calcProd.year}
+                                                                                </td>
+                                                                                <td className="p-2 text-center">
+                                                                                    {calcProd.매출월 !== undefined ? calcProd.매출월 : calcProd.month}
+                                                                                </td>
                                                                                 <td className="p-2 font-medium truncate max-w-[120px]">{calcProd.제품코드 || "-"}</td>
                                                                                 <td className="p-2 text-center">{calcProd.수량}</td>
                                                                                 <td className="p-2 text-center">{calcProd.기간}</td>
-                                                                                <td className="p-2 text-right">
-                                                                                    ${Number(calcProd.lpd).toLocaleString()}
-                                                                                </td>
-                                                                                <td className="p-2 text-right">
-                                                                                    ₩{Number(calcProd.lpw).toLocaleString()}
-                                                                                </td>
                                                                                 <td className="p-2 text-center">{calcProd.DC달러}%</td>
                                                                                 <td className="p-2 text-right">
+                                                                                    ${Number(calcProd.달러PPC || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                                                </td>
+                                                                                <td className="p-2 text-right">
+                                                                                    ${Number(calcProd.달러net || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                                                                </td>
+                                                                                <td className="p-2 text-right">
                                                                                     {Number(calcProd.환율).toLocaleString()}
+                                                                                </td>
+                                                                                <td className="p-2 text-right">
+                                                                                    ₩{Number(calcProd.원화PPC || 0).toLocaleString()}
                                                                                 </td>
                                                                                 <td className="p-2 text-center">{calcProd.DC원화}%</td>
                                                                                 <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/30">
@@ -319,10 +294,9 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                                                                 <td className="p-2 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/30">
                                                                                     ₩{Math.round(Number(calcProd.마진)).toLocaleString()}
                                                                                 </td>
-                                                                                <td className="p-2 text-right font-semibold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/30">
+                                                                                <td className="p-2 text-right font-semibold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/30 border-r border-gray-200 dark:border-gray-750">
                                                                                     {calcProd.마진율}%
                                                                                 </td>
-                                                                                <td className="p-2 text-center">{calcProd.년차}</td>
                                                                             </tr>
                                                                         ))}
                                                                     </tbody>
