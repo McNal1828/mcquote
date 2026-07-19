@@ -79,3 +79,65 @@ export function getFinalProducts(
         return processed;
     }
 }
+
+// 빈 제품 행 객체를 생성하는 공통 팩토리 함수
+export function createEmptyProductRow() {
+    return {
+        제품코드: "",
+        제품설명: "",
+        lpd: 0,
+        lpw: 0,
+        수량: 1,
+        기간: 1,
+        DC달러: 0,
+        환율: 0,
+        DC원화: 0,
+        공급가: 0,
+        마진: 0,
+        년차: new Date().getFullYear(),
+        원화PPC: 0,
+        마진율: "0.0",
+        매출월: 1,
+        stage: 10,
+    };
+}
+
+// 원화PPC 또는 마진율 변경 시 DC원화 역산 수식 공통화 함수
+export function calculateReverseDCWon(
+    field: string,
+    value: any,
+    product: any,
+): number | null {
+    const lpd = Number(product.lpd) || 0;
+    const lpw = Number(product.lpw) || 0;
+    const qty = Number(product.수량) || 0;
+    const period = Number(product.기간) || 0;
+    const dcDollar = Number(product.DC달러) || 0;
+    const exchangeRate = Number(product.환율) || 0;
+    const baseTotalLpw = lpw * qty * period;
+
+    if (baseTotalLpw <= 0) return null;
+
+    let targetSupply: number | null = null;
+    if (field === "원화PPC") {
+        targetSupply = (Number(value) || 0) * qty * period;
+    } else if (field === "마진율") {
+        const inputMarginPercent = Number(value) || 0;
+        if (inputMarginPercent < 100) {
+            const dollarPpc = lpd * (1 - dcDollar / 100);
+            const wonNet = dollarPpc * qty * period * exchangeRate;
+            targetSupply =
+                Math.round(
+                    wonNet /
+                        (1 - inputMarginPercent / 100) /
+                        1000,
+                ) * 1000;
+        }
+    }
+
+    if (targetSupply !== null) {
+        const rawDcWon = (1 - targetSupply / baseTotalLpw) * 100;
+        return Math.trunc(rawDcWon * 100) / 100;
+    }
+    return null;
+}

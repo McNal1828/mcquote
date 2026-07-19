@@ -1,7 +1,7 @@
 import { useState, Fragment, useEffect, useRef } from "react";
 import { useFetcher, useSearchParams, Link } from "react-router";
 import crypto from "crypto";
-import { getFinalProducts } from "~/utils/calculator";
+import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
 import type { Route } from "./+types/home";
 import db from "../db.server";
 import {
@@ -25,28 +25,6 @@ import {
     ChevronUp,
     ChevronsUpDown,
 } from "lucide-react";
-
-// 빈 제품 행 객체를 생성하는 팩토리 함수
-const createEmptyProductRow = () => ({
-    제품코드: "",
-    제품설명: "",
-    lpd: 0,
-    lpw: 0,
-    수량: 1,
-    기간: 1,
-    DC달러: 0,
-    환율: 0,
-    DC원화: 0,
-    공급가: 0,
-    margin: 0, // DTO 및 DB와 동기화된 기본 필드 명칭으로 맞춤 (마진)
-    공급가_원화: 0,
-    마진: 0,
-    년차: 1,
-    원화PPC: 0,
-    마진율: "0.0",
-    매출월: 1,
-    stage: 10,
-});
 
 export const handle = {
     breadcrumb: () => "홈페이지",
@@ -890,38 +868,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
             // 역산 로직 추가 (원화PPC 또는 마진율 변경 시 DC원화 재계산)
             if (field === "원화PPC" || field === "마진율") {
-                const lpd = Number(updatedProduct.lpd) || 0;
-                const lpw = Number(updatedProduct.lpw) || 0;
-                const qty = Number(updatedProduct.수량) || 0;
-                const period = Number(updatedProduct.기간) || 0;
-                const dcDollar = Number(updatedProduct.DC달러) || 0;
-                const exchangeRate = Number(updatedProduct.환율) || 0;
-                const baseTotalLpw = lpw * qty * period;
-
-                if (baseTotalLpw > 0) {
-                    let targetSupply: number | null = null;
-                    if (field === "원화PPC") {
-                        targetSupply = (Number(value) || 0) * qty * period;
-                    } else if (field === "마진율") {
-                        const inputMarginPercent = Number(value) || 0;
-                        if (inputMarginPercent < 100) {
-                            const dollarPpc = lpd * (1 - dcDollar / 100);
-                            const wonNet =
-                                dollarPpc * qty * period * exchangeRate;
-                            targetSupply =
-                                Math.round(
-                                    wonNet /
-                                    (1 - inputMarginPercent / 100) /
-                                    1000,
-                                ) * 1000;
-                        }
-                    }
-                    if (targetSupply !== null) {
-                        const rawDcWon =
-                            (1 - targetSupply / baseTotalLpw) * 100;
-                        updatedProduct.DC원화 =
-                            Math.trunc(rawDcWon * 100) / 100;
-                    }
+                const targetDcWon = calculateReverseDCWon(field, value, updatedProduct);
+                if (targetDcWon !== null) {
+                    updatedProduct.DC원화 = targetDcWon;
                 }
             }
 
