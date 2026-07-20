@@ -2,6 +2,64 @@ import ExcelJS from "exceljs";
 import db from "../db.server";
 import type { Route } from "./+types/api.home.download";
 
+function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, any[]>> {
+    if (quoteIds.length === 0) return {};
+
+    const placeholders = quoteIds.map(() => "?").join(",");
+
+    // 1. 한 번의 쿼리로 모든 그룹 조회
+    const groups = db.prepare(`
+        SELECT id, quote_id, name, "default" 
+        FROM quote_groups 
+        WHERE quote_id IN (${placeholders})
+    `).all(...quoteIds) as any[];
+
+    if (groups.length === 0) {
+        const empty: Record<number, Record<string, any[]>> = {};
+        quoteIds.forEach(id => { empty[id] = {}; });
+        return empty;
+    }
+
+    const groupIds = groups.map((g: any) => g.id);
+    const groupPlaceholders = groupIds.map(() => "?").join(",");
+
+    // 2. 한 번의 쿼리로 모든 라인 조회
+    const lines = db.prepare(`
+        SELECT 
+            l.id as line_id,
+            l.group_id,
+            l.line_number,
+            p.code as 제품코드,
+            l.description as 제품설명,
+            l.quantity as 수량,
+            l.period as 기간,
+            l.supply_price as 공급가
+        FROM quote_lines l
+        LEFT JOIN products p ON l.product_id = p.id
+        WHERE l.group_id IN (${groupPlaceholders})
+        ORDER BY l.line_number ASC
+    `).all(...groupIds) as any[];
+
+    // 3. 그룹 ID -> 라인 목록 매핑
+    const linesByGroup = new Map<number, any[]>();
+    lines.forEach((line: any) => {
+        if (!linesByGroup.has(line.group_id)) {
+            linesByGroup.set(line.group_id, []);
+        }
+        linesByGroup.get(line.group_id)!.push(line);
+    });
+
+    // 4. 견적 ID -> { "그룹명": [...라인] } 구조로 조립
+    const result: Record<number, Record<string, any[]>> = {};
+    quoteIds.forEach(id => { result[id] = {}; });
+
+    groups.forEach((group: any) => {
+        result[group.quote_id][group.name] = linesByGroup.get(group.id) || [];
+    });
+
+    return result;
+}
+
 export async function loader({ request }: Route.LoaderArgs) {
     const url = new URL(request.url);
 
@@ -55,9 +113,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     }
 
     const vendor = url.searchParams.get("vendor");
-    if (vendor) {
-        conditions.push("q.vendor = ?");
-        params.push(vendor);
+    if (vendor === "none") {
+        conditions.push("1 = 0");
+    } else if (vendor) {
+        const selected = vendor.split(",");
+        if (selected.length > 0) {
+            const placeholders = selected.map(() => "?").join(",");
+            conditions.push(`q.id IN (SELECT quote_id FROM quote_vendors WHERE vendor IN (${placeholders}))`);
+            selected.forEach(v => params.push(v));
+        }
     }
 
     const whereClause =
@@ -77,18 +141,18 @@ export async function loader({ request }: Route.LoaderArgs) {
     // 2. DB에서 조건에 맞는 전체 데이터 조회 (페이지네이션 없이 전부)
     const stmt = db.prepare(`
         SELECT 
+            q.id,
             p.name as partner_company,
             pc.name as partner_contact_name,
             q.client_company,
             q.project_name,
             dc.name as dist_contact_name,
-            q.vendor,
+            (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendor,
             a.name as am_name,
             q.created_at,
             q.updated_at,
             q.is_ordered,
-            q.is_lost,
-            q.products
+            q.is_lost
         FROM quotes q
         LEFT JOIN partners p ON q.partner_id = p.id
         LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
@@ -131,43 +195,30 @@ export async function loader({ request }: Route.LoaderArgs) {
         cell.alignment = { vertical: "middle", horizontal: "center" };
     });
 
+    // 모든 견적 ID 목록
+    const quoteIds = rawQuotes.map((q) => q.id);
+    const allProducts = getAllQuoteProducts(quoteIds);
+
     // 4. 데이터 기입
     rawQuotes.forEach((row) => {
-        // 제품 상세 JSON 파싱 및 포맷팅 (리스트 형식 텍스트화)
-        let productsText = "";
-        try {
-            const parsed = JSON.parse(row.products || "[]");
-            if (Array.isArray(parsed)) {
-                productsText = parsed
-                    .map((p: any) => {
-                        const code = p.제품코드 || "-";
-                        const qty = p.수량 || 0;
-                        const period = p.기간 || 0;
-                        const supply = Number(p.공급가) || 0;
-                        return `• ${code} / ${qty}ea / ${period}Y / ₩${supply.toLocaleString()}`;
-                    })
-                    .join("\n");
-            } else {
-                const parts: string[] = [];
-                for (const [groupName, prods] of Object.entries(parsed)) {
-                    parts.push(`[${groupName}]`);
-                    if (Array.isArray(prods)) {
-                        prods.forEach((p: any) => {
-                            const code = p.제품코드 || "-";
-                            const qty = p.수량 || 0;
-                            const period = p.기간 || 0;
-                            const supply = Number(p.공급가) || 0;
-                            parts.push(
-                                `  • ${code} / ${qty}ea / ${period}Y / ₩${supply.toLocaleString()}`,
-                            );
-                        });
-                    }
-                }
-                productsText = parts.join("\n");
+        const parsed = allProducts[row.id] || {};
+        const parts: string[] = [];
+        
+        for (const [groupName, prods] of Object.entries(parsed)) {
+            parts.push(`[${groupName}]`);
+            if (Array.isArray(prods)) {
+                prods.forEach((p: any) => {
+                    const code = p.제품코드 || "-";
+                    const qty = p.수량 || 0;
+                    const period = p.기간 || 0;
+                    const supply = Number(p.공급가) || 0;
+                    parts.push(
+                        `  • ${code} / ${qty}ea / ${period}Y / ₩${supply.toLocaleString()}`,
+                    );
+                });
             }
-        } catch (e) {
-            productsText = "제품 정보 없음";
         }
+        const productsText = parts.join("\n");
 
         const addedRow = worksheet.addRow({
             partner: row.partner_company || "",

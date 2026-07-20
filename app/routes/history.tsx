@@ -2,6 +2,7 @@ import { useState, Fragment } from "react";
 import { Link } from "react-router";
 import db from "../db.server";
 import { getFinalProducts } from "~/utils/calculator";
+import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/history";
 import {
     ArrowLeft,
@@ -67,7 +68,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
 
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 py-8 px-4 sm:px-6 lg:px-8">
-            <div className="max-w-7xl mx-auto space-y-8">
+            <div className="max-w-[1600px] mx-auto space-y-8">
                 {/* Header Navigation */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-gray-200 dark:border-gray-800 pb-5">
                     <div className="flex items-center gap-3">
@@ -238,69 +239,14 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                                                 추가된 제품이 없습니다.
                                                             </div>
                                                         ) : (
-                                                            <div className="overflow-x-auto border border-gray-200 dark:border-gray-750 rounded-lg">
-                                                                <table className="w-full text-xs text-left border-collapse">
-                                                                    <thead className="bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-400 uppercase divide-y divide-gray-250 dark:divide-gray-750">
-                                                                        <tr className="divide-x divide-gray-200 dark:divide-gray-750">
-                                                                            <th className="p-2 font-semibold text-center w-16">매출년</th>
-                                                                            <th className="p-2 font-semibold text-center w-16">매출월</th>
-                                                                            <th className="p-2 font-semibold text-center w-28">제품코드</th>
-                                                                            <th className="p-2 font-semibold text-center w-12">수량</th>
-                                                                            <th className="p-2 font-semibold text-center w-12">기간</th>
-                                                                            <th className="p-2 font-semibold text-center w-20">DC달러(%)</th>
-                                                                            <th className="p-2 font-semibold text-right w-24">달러PPC($)</th>
-                                                                            <th className="p-2 font-semibold text-right w-24">달러net($)</th>
-                                                                            <th className="p-2 font-semibold text-right w-20">환율(₩)</th>
-                                                                            <th className="p-2 font-semibold text-right w-28">원화PPC(₩)</th>
-                                                                            <th className="p-2 font-semibold text-center w-20">DC원화(%)</th>
-                                                                            <th className="p-2 font-semibold text-center w-28">공급가(₩)</th>
-                                                                            <th className="p-2 font-semibold text-center w-28">마진(₩)</th>
-                                                                            <th className="p-2 font-semibold text-right w-20 border-r border-gray-200 dark:border-gray-750">마진%</th>
-                                                                        </tr>
-                                                                    </thead>
-                                                                    <tbody className="divide-y divide-gray-200 dark:divide-gray-750">
-                                                                        {finalProds.map((calcProd: any, idx: number) => (
-                                                                            <tr
-                                                                                key={idx}
-                                                                                className="border-b last:border-b-0 border-gray-200 dark:border-gray-750 hover:bg-gray-50 dark:hover:bg-gray-900/50 divide-x divide-gray-200 dark:divide-gray-750"
-                                                                            >
-                                                                                <td className="p-2 text-center">
-                                                                                    {calcProd.년차 !== undefined ? calcProd.년차 : calcProd.year}
-                                                                                </td>
-                                                                                <td className="p-2 text-center">
-                                                                                    {calcProd.매출월 !== undefined ? calcProd.매출월 : calcProd.month}
-                                                                                </td>
-                                                                                <td className="p-2 font-medium truncate max-w-[120px]">{calcProd.제품코드 || "-"}</td>
-                                                                                <td className="p-2 text-center">{calcProd.수량}</td>
-                                                                                <td className="p-2 text-center">{calcProd.기간}</td>
-                                                                                <td className="p-2 text-center">{calcProd.DC달러}%</td>
-                                                                                <td className="p-2 text-right">
-                                                                                    ${Number(calcProd.달러PPC || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                                                </td>
-                                                                                <td className="p-2 text-right">
-                                                                                    ${Number(calcProd.달러net || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                                                                </td>
-                                                                                <td className="p-2 text-right">
-                                                                                    {Number(calcProd.환율).toLocaleString()}
-                                                                                </td>
-                                                                                <td className="p-2 text-right">
-                                                                                    ₩{Number(calcProd.원화PPC || 0).toLocaleString()}
-                                                                                </td>
-                                                                                <td className="p-2 text-center">{calcProd.DC원화}%</td>
-                                                                                <td className="p-2 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/30">
-                                                                                    ₩{Number(calcProd.공급가).toLocaleString()}
-                                                                                </td>
-                                                                                <td className="p-2 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/30">
-                                                                                    ₩{Math.round(Number(calcProd.마진)).toLocaleString()}
-                                                                                </td>
-                                                                                <td className="p-2 text-right font-semibold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/30 border-r border-gray-200 dark:border-gray-750">
-                                                                                    {calcProd.마진율}%
-                                                                                </td>
-                                                                            </tr>
-                                                                        ))}
-                                                                    </tbody>
-                                                                </table>
-                                                            </div>
+                                                            <ProductTable
+                                                                rawProducts={finalProds}
+                                                                finalProducts={finalProds}
+                                                                isEditable={false}
+                                                                calcMode={quote.quote_type === 0 ? "PPC" : "DC"}
+                                                                masterProducts={[]}
+                                                                vendorFilter={quote.vendor}
+                                                            />
                                                         )}
                                                     </div>
                                                 );

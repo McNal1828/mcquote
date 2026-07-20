@@ -26,6 +26,7 @@ import {
     Sun,
     Moon,
     LogIn,
+    TrendingUp,
 } from "lucide-react";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -63,7 +64,8 @@ const navItems = [
     { path: "/partners", label: "파트너사 목록", icon: Building2 },
     { path: "/contacts", label: "파트너사 담당자 목록", icon: Users },
     { path: "/dist", label: "총판 담당자 목록", icon: UserCheck },
-    { path: "/stats", label: "통계", icon: BarChart3 },
+    { path: "/stats", label: "견적 통계", icon: BarChart3 },
+    { path: "/stats_revenue", label: "매출 통계", icon: TrendingUp },
 ];
 
 // 1. 보안이 강화된 HTTP-Only 쿠키 설정
@@ -206,7 +208,7 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
     // 로그인 성공 시 (정상 라우터 화면 렌더링)
     return (
         <div className="flex flex-col min-h-screen">
-            <header className="bg-white dark:bg-gray-800 shadow-sm sticky top-0 z-50">
+            <header className="bg-white/90 dark:bg-gray-900/90 backdrop-blur-md shadow-sm sticky top-0 z-50 border-b border-gray-200 dark:border-gray-800">
                 <nav className="container mx-auto px-4 flex items-center justify-between">
                     <div className="overflow-x-auto w-full no-scrollbar">
                         <ul className="flex space-x-8 py-4 whitespace-nowrap">
@@ -260,7 +262,7 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
             <main className="flex-grow">
                 <Outlet />
             </main>
-            <footer className="py-6 mt-auto text-center text-sm text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+            <footer className="py-6 mt-auto text-center text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800">
                 &copy; {new Date().getFullYear()} McNal. All rights reserved.
             </footer>
         </div>

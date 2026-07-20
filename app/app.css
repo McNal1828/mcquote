@@ -47,3 +47,14 @@ html.dark {
         @apply !bg-blue-50 dark:!bg-gray-600/70 transition-colors;
     }
 }
+
+/* input type="number"의 조절(스피너) 버튼을 완전히 숨겨서 공간 낭비 방지 */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+}
