@@ -15,11 +15,12 @@ import {
     ChevronsUpDown,
     Edit2,
     UserCheck,
+    ArchiveRestore,
 } from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
-        "SELECT id, name, position FROM dist_contacts ORDER BY name ASC",
+        "SELECT id, name, position, available FROM dist_contacts ORDER BY name ASC",
     );
     const distContacts = stmt.all();
     return { distContacts };
@@ -38,7 +39,7 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(
-                "INSERT INTO dist_contacts (name, position) VALUES (?, ?)",
+                "INSERT INTO dist_contacts (name, position, available) VALUES (?, ?, 1)",
             );
             stmt.run(name, position);
             return { success: true, intent: "add" };
@@ -50,11 +51,22 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "삭제할 ID가 필요합니다.", intent: "delete" };
         }
         try {
-            const stmt = db.prepare("DELETE FROM dist_contacts WHERE id = ?");
+            const stmt = db.prepare("UPDATE dist_contacts SET available = 0 WHERE id = ?");
             stmt.run(Number(id));
             return { success: true, intent: "delete" };
         } catch (error) {
             return { error: "삭제 중 오류가 발생했습니다.", intent: "delete" };
+        }
+    } else if (intent === "restore") {
+        if (!id) {
+            return { error: "복구할 ID가 필요합니다.", intent: "restore" };
+        }
+        try {
+            const stmt = db.prepare("UPDATE dist_contacts SET available = 1 WHERE id = ?");
+            stmt.run(Number(id));
+            return { success: true, intent: "restore" };
+        } catch (error) {
+            return { error: "복구 중 오류가 발생했습니다.", intent: "restore" };
         }
     } else if (intent === "edit") {
         if (!id || !name) {
@@ -74,6 +86,13 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function DistContacts({ loaderData }: Route.ComponentProps) {
+    const [showAvailableOnly, setShowAvailableOnly] = useState(true);
+
+    // 사용 여부 필터를 적용한 총판 담당자 리스트
+    const filteredDistContacts = loaderData.distContacts.filter(
+        (d: any) => d.available === (showAvailableOnly ? 1 : 0)
+    );
+
     // 공통 테이블 정렬 및 필터 훅 사용
     const {
         processedData,
@@ -82,7 +101,7 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
         handleFilterChange,
         handleSort,
     } = useTableFeatures({
-        data: loaderData.distContacts,
+        data: filteredDistContacts,
     });
 
     const fetcher = useFetcher();
@@ -128,6 +147,8 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                     msg = "성공적으로 수정되었습니다.";
                 if (fetcher.data.intent === "delete")
                     msg = "성공적으로 삭제되었습니다.";
+                if (fetcher.data.intent === "restore")
+                    msg = "성공적으로 복구되었습니다.";
                 setToast({ message: msg, type: "success" });
             }
         }
@@ -167,6 +188,14 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
             );
             setEditingId(null);
         }
+    };
+
+    const handleRestore = (id: number) => {
+        fetcher.submit(
+            { intent: "restore", id: id.toString() },
+            { method: "post" },
+        );
+        setEditingId(null);
     };
 
     const renderTh = (label: string, sortKey: string) => {
@@ -273,6 +302,32 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                 </addFetcher.Form>
             </div>
 
+            {/* 필터 탭/토글 영역 */}
+            <div className="flex justify-end gap-2 mb-4">
+                <button
+                    type="button"
+                    onClick={() => setShowAvailableOnly(true)}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                        showAvailableOnly
+                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                            : "bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
+                >
+                    <CheckCircle2 className="w-4 h-4" /> 사용 중 담당자
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setShowAvailableOnly(false)}
+                    className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+                        !showAvailableOnly
+                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                            : "bg-white text-gray-700 border-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700"
+                    }`}
+                >
+                    <ArchiveRestore className="w-4 h-4" /> 삭제된 담당자
+                </button>
+            </div>
+
             <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
                 <table className="w-full text-left border-collapse">
                     <thead>
@@ -368,15 +423,27 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                                                 {contact.position}
                                             </td>
                                             <td className="p-4 text-center">
-                                                <button
-                                                    onClick={() =>
-                                                        handleEditClick(contact)
-                                                    }
-                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-3 shadow-sm"
-                                                >
-                                                    <Edit2 className="w-3 h-3 mr-1" />{" "}
-                                                    수정
-                                                </button>
+                                                {contact.available === 1 ? (
+                                                    <button
+                                                        onClick={() =>
+                                                            handleEditClick(contact)
+                                                        }
+                                                        className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-7 px-3 shadow-sm"
+                                                    >
+                                                        <Edit2 className="w-3 h-3 mr-1" />{" "}
+                                                        수정
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        onClick={() =>
+                                                            handleRestore(contact.id)
+                                                        }
+                                                        className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-50 text-green-700 hover:bg-green-100 dark:bg-green-950/40 dark:text-green-300 dark:hover:bg-green-900/40 border border-green-200 dark:border-green-800 h-7 px-3 shadow-sm"
+                                                    >
+                                                        <CheckCircle2 className="w-3 h-3 mr-1" />{" "}
+                                                        복구
+                                                    </button>
+                                                )}
                                             </td>
                                         </>
                                     )}

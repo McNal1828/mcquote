@@ -269,20 +269,17 @@ export default function ProductTable({
                 {/* 15. 단계 */}
                 <td className="p-1.5">
                   {isEditable ? (
-                    <input
-                      type="number"
-                      value={rawProd.stage ?? ""}
-                      onChange={(e) => onChangeProduct?.(idx, "stage", e.target.value)}
-                      onBlur={(e) => {
-                        const num = parseInt(e.target.value, 10);
-                        if (isNaN(num)) {
-                          onChangeProduct?.(idx, "stage", 10);
-                        } else {
-                          onChangeProduct?.(idx, "stage", num);
-                        }
-                      }}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
-                    />
+                    <select
+                      value={rawProd.stage ?? "10"}
+                      onChange={(e) => onChangeProduct?.(idx, "stage", Number(e.target.value))}
+                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      {[0, 10, 25, 50, 75, 99, 100].map((val) => (
+                        <option key={val} value={val}>
+                          {val}%
+                        </option>
+                      ))}
+                    </select>
                   ) : (
                     <div className="text-center px-1.5">
                       {calcProd.stage !== undefined && calcProd.stage !== null ? `${calcProd.stage}%` : "10%"}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Form } from "react-router";
+import { Form, redirect } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/stats_partner";
 import {
@@ -16,14 +16,13 @@ import {
     Clock,
 } from "lucide-react";
 import {
-    BarChart,
-    Bar,
+    AreaChart,
+    Area,
     XAxis,
     YAxis,
     CartesianGrid,
     Tooltip,
     ResponsiveContainer,
-    Legend,
 } from "recharts";
 
 export function shouldRevalidate() {
@@ -32,19 +31,28 @@ export function shouldRevalidate() {
 
 export async function loader({ request }: Route.LoaderArgs) {
     const url = new URL(request.url);
-    let startDate = url.searchParams.get("startDate");
-    let endDate = url.searchParams.get("endDate");
+    const startDateParam = url.searchParams.get("startDate");
+    const endDateParam = url.searchParams.get("endDate");
 
-    // 1. 기간 기본값 설정 (현재 달의 1일 ~ 마지막 날)
-    const now = new Date();
-    if (!startDate || !endDate) {
+    // 파라미터가 누락되면 기본값(이전 달 1일 ~ 이번 달 말일, 최소 2달 확보)으로 주소창 강제 동기화 리다이렉트
+    if (!startDateParam || !endDateParam) {
+        const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
         const y = now.getFullYear();
         const m = String(now.getMonth() + 1).padStart(2, "0");
         const lastDay = new Date(y, now.getMonth() + 1, 0);
 
-        startDate = `${y}-${m}-01`;
-        endDate = `${y}-${m}-${String(lastDay.getDate()).padStart(2, "0")}`;
+        // 이전 달의 1일 계산
+        const prevMonthDate = new Date(y, now.getMonth() - 1, 1);
+        const py = prevMonthDate.getFullYear();
+        const pm = String(prevMonthDate.getMonth() + 1).padStart(2, "0");
+
+        url.searchParams.set("startDate", `${py}-${pm}-01`);
+        url.searchParams.set("endDate", `${y}-${m}-${String(lastDay.getDate()).padStart(2, "0")}`);
+        return redirect(url.pathname + url.search);
     }
+
+    const startDate = startDateParam;
+    const endDate = endDateParam;
 
     // 날짜 문자열을 DB 조회를 위한 Unix Timestamp(밀리초)로 변환
     const startTimestamp = new Date(`${startDate}T00:00:00`).getTime();
@@ -164,9 +172,17 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.is_ordered,
             q.is_lost,
             q.partner_id,
+            p.name as partner_name,
             q.dist_contact_id,
-            (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendors
+            (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendors,
+            CASE WHEN q.is_lost = 1 THEN 0 ELSE COALESCE((
+                SELECT SUM(ql.supply_price)
+                FROM quote_lines ql
+                JOIN quote_groups qg ON ql.group_id = qg.id
+                WHERE qg.quote_id = q.id AND qg."default" = 1
+            ), 0) END as total_price
         FROM quotes q
+        LEFT JOIN partners p ON q.partner_id = p.id
         WHERE ${timeFilter}
     `,
         )
@@ -233,6 +249,7 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
     const [expandedPartners, setExpandedPartners] = useState<Set<number>>(new Set());
     const [expandedVendors, setExpandedVendors] = useState<Set<string>>(new Set());
     const [mounted, setMounted] = useState(false);
+    const [activeMetric, setActiveMetric] = useState<"count" | "price">("count");
 
     // 필터링 상태 (체크박스 활성화 상태)
     const [activePartners, setActivePartners] = useState<Set<number>>(() => new Set((partnerStats as any[]).map((p: any) => p.partner_id)));
@@ -368,7 +385,18 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
         };
     }, [filteredQuotes, startTimestamp, endTimestamp]);
 
-    // 필터링 적용된 실시간 월별 건수 추이 차트 데이터 계산
+    // 필터링된 견적 내에 속해 있는 고유한 파트너사 목록 추출 (정렬 적용)
+    const partnerNames = useMemo(() => {
+        const names = new Set<string>();
+        filteredQuotes.forEach((q) => {
+            if (q.partner_name) {
+                names.add(q.partner_name);
+            }
+        });
+        return Array.from(names).sort();
+    }, [filteredQuotes]);
+
+    // 필터링 적용된 실시간 월별 파트너별 견적 건수 및 공급가액 추이 차트 데이터 계산
     const currentMonthlyTrend = useMemo(() => {
         const monthlyDataMap: Record<string, any> = {};
 
@@ -376,27 +404,161 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
             const isNew = q.created_at >= startTimestamp && q.created_at <= endTimestamp;
             const isModified = !isNew && (q.updated_at >= startTimestamp && q.updated_at <= endTimestamp);
 
+            let d: Date | null = null;
             if (isNew) {
-                const d = new Date(q.created_at);
-                const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-                if (!monthlyDataMap[mKey]) {
-                    monthlyDataMap[mKey] = { month: mKey, newCount: 0, modCount: 0 };
-                }
-                monthlyDataMap[mKey].newCount += 1;
+                d = new Date(q.created_at);
             } else if (isModified) {
-                const d = new Date(q.updated_at);
+                d = new Date(q.updated_at);
+            }
+
+            if (d && q.partner_name) {
                 const mKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
                 if (!monthlyDataMap[mKey]) {
-                    monthlyDataMap[mKey] = { month: mKey, newCount: 0, modCount: 0 };
+                    monthlyDataMap[mKey] = {
+                        month: mKey,
+                    };
                 }
-                monthlyDataMap[mKey].modCount += 1;
+
+                // 영업 상태 분류 (오더 완료, 실주, 진행 중)
+                let status = "pending";
+                if (q.is_ordered === 1) {
+                    status = "ordered";
+                } else if (q.is_lost === 1) {
+                    status = "lost";
+                }
+
+                const countKey = `${q.partner_name}_count`;
+                const priceKey = `${q.partner_name}_price`;
+                
+                const statusCountKey = `${q.partner_name}_${status}_count`;
+                const statusPriceKey = `${q.partner_name}_${status}_price`;
+
+                // 총합 합산
+                monthlyDataMap[mKey][countKey] = (monthlyDataMap[mKey][countKey] || 0) + 1;
+                monthlyDataMap[mKey][priceKey] = (monthlyDataMap[mKey][priceKey] || 0) + (q.total_price || 0);
+
+                // 상태별 세부 합산
+                monthlyDataMap[mKey][statusCountKey] = (monthlyDataMap[mKey][statusCountKey] || 0) + 1;
+                monthlyDataMap[mKey][statusPriceKey] = (monthlyDataMap[mKey][statusPriceKey] || 0) + (q.total_price || 0);
             }
         });
 
-        return Object.values(monthlyDataMap).sort((a: any, b: any) =>
+        // 빈 파트너사의 지표값을 0으로 동화시켜 왜곡을 원천 방지 및 상세 상태도 0으로 동화
+        const result = Object.values(monthlyDataMap).map((item: any) => {
+            partnerNames.forEach((name) => {
+                const countKey = `${name}_count`;
+                const priceKey = `${name}_price`;
+                if (item[countKey] === undefined) item[countKey] = 0;
+                if (item[priceKey] === undefined) item[priceKey] = 0;
+
+                ["pending", "ordered", "lost"].forEach((status) => {
+                    const statusCountKey = `${name}_${status}_count`;
+                    const statusPriceKey = `${name}_${status}_price`;
+                    if (item[statusCountKey] === undefined) item[statusCountKey] = 0;
+                    if (item[statusPriceKey] === undefined) item[statusPriceKey] = 0;
+                });
+            });
+            return item;
+        });
+
+        return result.sort((a: any, b: any) =>
             a.month.localeCompare(b.month),
         );
-    }, [filteredQuotes, startTimestamp, endTimestamp]);
+    }, [filteredQuotes, partnerNames, startTimestamp, endTimestamp]);
+
+    // 전체 파트너사별 건수 및 금액 누적 총합을 구해 각각 내림차순 순위 추출
+    const topPartnersInfo = useMemo(() => {
+        const counts: Record<string, number> = {};
+        const prices: Record<string, number> = {};
+        
+        filteredQuotes.forEach((q) => {
+            if (q.partner_name) {
+                counts[q.partner_name] = (counts[q.partner_name] || 0) + 1;
+                prices[q.partner_name] = (prices[q.partner_name] || 0) + (q.total_price || 0);
+            }
+        });
+
+        const sortedByCount = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+        const sortedByPrice = Object.keys(prices).sort((a, b) => prices[b] - prices[a]);
+
+        return {
+            countTop: sortedByCount.slice(0, 7),
+            countOthers: sortedByCount.slice(7),
+            priceTop: sortedByPrice.slice(0, 7),
+            priceOthers: sortedByPrice.slice(7),
+        };
+    }, [filteredQuotes]);
+
+    // 활성 지표(건수/금액)에 따른 동적 상위 7개사와 기타 파트너사 목록
+    const activeTopPartners = useMemo(() => {
+        return activeMetric === "count" ? topPartnersInfo.countTop : topPartnersInfo.priceTop;
+    }, [activeMetric, topPartnersInfo]);
+
+    const activeOthers = useMemo(() => {
+        return activeMetric === "count" ? topPartnersInfo.countOthers : topPartnersInfo.priceOthers;
+    }, [activeMetric, topPartnersInfo]);
+
+    // 차트에서 동적으로 그릴 파트너사 목록 (상위 7개사 + 기타)
+    const chartPartners = useMemo(() => {
+        const list = [...activeTopPartners];
+        if (activeOthers.length > 0) {
+            list.push("기타");
+        }
+        return list;
+    }, [activeTopPartners, activeOthers]);
+
+    // 월별 데이터를 상위 7개사와 '기타'로 합산 가공한 최종 차트용 데이터 배열
+    const finalChartData = useMemo(() => {
+        return currentMonthlyTrend.map((monthItem: any) => {
+            const newItem: any = { month: monthItem.month };
+            
+            // 1. 상위 7개 파트너사는 데이터 그대로 이관
+            activeTopPartners.forEach((name) => {
+                const suffix = activeMetric === "count" ? "count" : "price";
+                newItem[name] = monthItem[`${name}_${suffix}`] || 0;
+                
+                // 툴팁 연동용 개별 상태 수치 복사
+                newItem[`${name}_ordered_count`] = monthItem[`${name}_ordered_count`] || 0;
+                newItem[`${name}_pending_count`] = monthItem[`${name}_pending_count`] || 0;
+                newItem[`${name}_lost_count`] = monthItem[`${name}_lost_count`] || 0;
+                newItem[`${name}_ordered_price`] = monthItem[`${name}_ordered_price`] || 0;
+                newItem[`${name}_pending_price`] = monthItem[`${name}_pending_price`] || 0;
+                newItem[`${name}_lost_price`] = monthItem[`${name}_lost_price`] || 0;
+            });
+
+            // 2. 8위 이하 기타 파트너사는 '기타' 키 하위로 전부 합산 집계
+            if (activeOthers.length > 0) {
+                const suffix = activeMetric === "count" ? "count" : "price";
+                let othersSum = 0;
+                let othersOrderedCount = 0;
+                let othersPendingCount = 0;
+                let othersLostCount = 0;
+                let othersOrderedPrice = 0;
+                let othersPendingPrice = 0;
+                let othersLostPrice = 0;
+
+                activeOthers.forEach((name) => {
+                    othersSum += monthItem[`${name}_${suffix}`] || 0;
+                    othersOrderedCount += monthItem[`${name}_ordered_count`] || 0;
+                    othersPendingCount += monthItem[`${name}_pending_count`] || 0;
+                    othersLostCount += monthItem[`${name}_lost_count`] || 0;
+                    othersOrderedPrice += monthItem[`${name}_ordered_price`] || 0;
+                    othersPendingPrice += monthItem[`${name}_pending_price`] || 0;
+                    othersLostPrice += monthItem[`${name}_lost_price`] || 0;
+                });
+
+                newItem["기타"] = othersSum;
+                newItem["기타_ordered_count"] = othersOrderedCount;
+                newItem["기타_pending_count"] = othersPendingCount;
+                newItem["기타_lost_count"] = othersLostCount;
+                newItem["기타_ordered_price"] = othersOrderedPrice;
+                newItem["기타_pending_price"] = othersPendingPrice;
+                newItem["기타_lost_price"] = othersLostPrice;
+            }
+
+            return newItem;
+        });
+    }, [currentMonthlyTrend, activeTopPartners, activeOthers, activeMetric]);
 
     // 비율 헬퍼
     const getRatioText = (current: number, total: number) => {
@@ -404,21 +566,121 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
         return `/ ${total}건 (${percent}%)`;
     };
 
+    // 금액 포맷터 헬퍼
+    const formatCurrency = (value: number) => {
+        return new Intl.NumberFormat("ko-KR").format(value) + "원";
+    };
+
+    const formatCurrencyBrief = (value: number) => {
+        if (Math.abs(value) >= 100000000) {
+            const eok = (value / 100000000).toFixed(2);
+            return `${eok}억원`;
+        }
+        if (Math.abs(value) >= 10000) {
+            const man = (value / 10000).toFixed(0);
+            return `${man}만원`;
+        }
+        return `${value}원`;
+    };
+
     // 차트용 커스텀 툴팁
     const CustomTooltip = ({ active, payload, label }: any) => {
         if (active && payload && payload.length) {
+            const rowData = payload[0].payload;
+
+            // 값이 존재하는 파트너사를 기여도 순(내림차순)으로 나열
+            const items = payload
+                .map((p: any) => {
+                    const name = p.name;
+                    const value = p.value || 0;
+                    const color = p.color;
+
+                    // 상태별 수치 추출
+                    const ordered = rowData[`${name}_ordered_count`] || 0;
+                    const pending = rowData[`${name}_pending_count`] || 0;
+                    const lost = rowData[`${name}_lost_count`] || 0;
+
+                    const orderedPrice = rowData[`${name}_ordered_price`] || 0;
+                    const pendingPrice = rowData[`${name}_pending_price`] || 0;
+                    const lostPrice = rowData[`${name}_lost_price`] || 0;
+
+                    return {
+                        name,
+                        value,
+                        color,
+                        ordered,
+                        pending,
+                        lost,
+                        orderedPrice,
+                        pendingPrice,
+                        lostPrice,
+                    };
+                })
+                .filter((item: any) => item.value > 0)
+                .sort((a: any, b: any) => b.value - a.value);
+
+            const total = items.reduce((sum: number, item: any) => sum + item.value, 0);
+
             return (
-                <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-lg shadow-lg">
-                    <p className="font-semibold text-gray-800 dark:text-gray-200 mb-2">
-                        {label}월
+                <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4 rounded-lg shadow-lg min-w-[280px] max-h-[400px] overflow-y-auto">
+                    <p className="font-semibold text-gray-800 dark:text-gray-200 mb-2 border-b dark:border-gray-700 pb-1">
+                        {label}월 파트너 견적 분석
                     </p>
-                    <div className="flex flex-col gap-1.5 text-xs">
-                        <p className="text-amber-500 dark:text-amber-400 font-medium">
-                            수정 견적: {payload[1]?.value || 0}건
-                        </p>
-                        <p className="text-blue-600 dark:text-blue-400 font-medium">
-                            신규 견적: {payload[0]?.value || 0}건
-                        </p>
+                    <div className="flex flex-col gap-3 text-xs">
+                        {items.map((item: any) => (
+                            <div key={item.name} className="border-b border-gray-100 dark:border-gray-700/50 pb-2 last:border-b-0 last:pb-0">
+                                <div className="flex justify-between items-center mb-1">
+                                    <span className="flex items-center gap-1.5 font-bold">
+                                        <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: item.color }} />
+                                        <span className="text-gray-800 dark:text-gray-200">{item.name}</span>
+                                    </span>
+                                    <span className="font-bold text-gray-900 dark:text-white">
+                                        {activeMetric === "count" 
+                                            ? `${item.value}건` 
+                                            : formatCurrency(item.value)
+                                        }
+                                    </span>
+                                </div>
+                                <div className="pl-4 flex flex-col gap-0.5 text-[11px] text-gray-500 dark:text-gray-400">
+                                    <div className="flex justify-between">
+                                        <span>• 오더 완료:</span>
+                                        <span className="font-medium text-gray-700 dark:text-gray-300">
+                                            {activeMetric === "count" 
+                                                ? `${item.ordered}건` 
+                                                : formatCurrency(item.orderedPrice)
+                                            }
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>• 진행 중:</span>
+                                        <span className="font-medium text-gray-700 dark:text-gray-300">
+                                            {activeMetric === "count" 
+                                                ? `${item.pending}건` 
+                                                : formatCurrency(item.pendingPrice)
+                                            }
+                                        </span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                        <span>• 실주:</span>
+                                        <span className="font-medium text-gray-700 dark:text-gray-300">
+                                            {activeMetric === "count" 
+                                                ? `${item.lost}건` 
+                                                : formatCurrency(item.lostPrice)
+                                            }
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        <div className="flex justify-between items-center border-t dark:border-gray-700 pt-2 mt-1 font-bold text-blue-600 dark:text-blue-400">
+                            <span>전체 합계</span>
+                            <span>
+                                {activeMetric === "count" 
+                                    ? `${total}건` 
+                                    : formatCurrency(total)
+                                }
+                            </span>
+                        </div>
                     </div>
                 </div>
             );
@@ -479,7 +741,7 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-baseline gap-1.5 flex-wrap">
                         <span>{currentSummary.totalNew}건</span>
                         <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-                            {getRatioText(currentSummary.totalNew, summary.totalNew)}
+                            {getRatioText(currentSummary.totalNew, currentSummary.totalQuotes)}
                         </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-1">
@@ -498,7 +760,7 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-baseline gap-1.5 flex-wrap">
                         <span>{currentSummary.totalModified}건</span>
                         <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-                            {getRatioText(currentSummary.totalModified, summary.totalModified)}
+                            {getRatioText(currentSummary.totalModified, currentSummary.totalQuotes)}
                         </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-1">
@@ -517,7 +779,7 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-baseline gap-1.5 flex-wrap">
                         <span>{currentSummary.totalPending}건</span>
                         <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-                            {getRatioText(currentSummary.totalPending, summary.totalPending)}
+                            {getRatioText(currentSummary.totalPending, currentSummary.totalQuotes)}
                         </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-1">
@@ -536,7 +798,7 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-baseline gap-1.5 flex-wrap">
                         <span>{currentSummary.totalOrdered}건</span>
                         <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-                            {getRatioText(currentSummary.totalOrdered, summary.totalOrdered)}
+                            {getRatioText(currentSummary.totalOrdered, currentSummary.totalQuotes)}
                         </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-1">
@@ -555,7 +817,7 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white flex items-baseline gap-1.5 flex-wrap">
                         <span>{currentSummary.totalLost}건</span>
                         <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-                            {getRatioText(currentSummary.totalLost, summary.totalLost)}
+                            {getRatioText(currentSummary.totalLost, currentSummary.totalQuotes)}
                         </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-1">
@@ -564,20 +826,49 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                 </div>
             </div>
 
-            {/* 구역 2: 월별 견적 건수 추이 차트 (이중 바 차트) */}
+            {/* 구역 2: 월별 파트너사 견적 추이 차트 (Stacked Area Chart) */}
             <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-6 shadow-sm mb-6">
-                <h3 className="text-base font-bold mb-6 dark:text-white flex items-center">
-                    <TrendingUp className="w-5 h-5 mr-2 text-blue-500" /> 월별 견적 건수 추이
-                </h3>
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                    <h3 className="text-base font-bold dark:text-white flex items-center mb-0">
+                        <TrendingUp className="w-5 h-5 mr-2 text-blue-500" /> 월별 파트너 견적 추이
+                    </h3>
+                    
+                    {/* 토글 버튼 */}
+                    <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700 p-0.5 rounded-lg text-xs">
+                        <button
+                            type="button"
+                            onClick={() => setActiveMetric("count")}
+                            className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                                activeMetric === "count"
+                                    ? "bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm"
+                                    : "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+                            }`}
+                        >
+                            건수 기준
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveMetric("price")}
+                            className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                                activeMetric === "price"
+                                    ? "bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm"
+                                    : "text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
+                            }`}
+                        >
+                            금액 기준
+                        </button>
+                    </div>
+                </div>
+                
                 <div className="h-[300px] w-full">
                     {mounted ? (
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart
-                                data={currentMonthlyTrend}
+                            <AreaChart
+                                data={finalChartData}
                                 margin={{
                                     top: 10,
                                     right: 10,
-                                    left: 0,
+                                    left: 20,
                                     bottom: 0,
                                 }}
                             >
@@ -597,28 +888,36 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
                                     axisLine={false}
                                     tickLine={false}
                                     tick={{ fontSize: 12, fill: "#6b7280" }}
-                                    allowDecimals={false}
+                                    tickFormatter={(val) => 
+                                        activeMetric === "count" ? val : formatCurrencyBrief(val)
+                                    }
                                 />
                                 <Tooltip
                                     content={<CustomTooltip />}
-                                    cursor={{ fill: "rgba(0,0,0,0.02)" }}
+                                    cursor={{ stroke: '#3b82f6', strokeWidth: 1, strokeDasharray: '3 3' }}
                                 />
-                                <Legend />
-                                <Bar
-                                    dataKey="modCount"
-                                    name="수정 견적"
-                                    fill="#f59e0b"
-                                    radius={[4, 4, 0, 0]}
-                                    maxBarSize={30}
-                                />
-                                <Bar
-                                    dataKey="newCount"
-                                    name="신규 견적"
-                                    fill="#3b82f6"
-                                    radius={[4, 4, 0, 0]}
-                                    maxBarSize={30}
-                                />
-                            </BarChart>
+                                {(() => {
+                                    const COLORS = [
+                                        "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
+                                        "#ec4899", "#14b8a6"
+                                    ];
+                                    return chartPartners.map((name, index) => {
+                                        const color = name === "기타" ? "#9ca3af" : COLORS[index % COLORS.length];
+                                        return (
+                                            <Area
+                                                key={name}
+                                                type="monotone"
+                                                dataKey={name}
+                                                name={name}
+                                                stackId="1"
+                                                stroke={color}
+                                                fill={color}
+                                                fillOpacity={0.2}
+                                            />
+                                        );
+                                    });
+                                })()}
+                            </AreaChart>
                         </ResponsiveContainer>
                     ) : (
                         <div className="w-full h-full flex items-center justify-center text-gray-400">

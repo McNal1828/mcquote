@@ -723,6 +723,31 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
     // 견적 수정 저장
     const handleSaveEdit = (quoteId: number) => {
+        // [오더 / 실주 상태에 따른 단계 자동 일관성 보정]
+        let targetStage = editStage;
+        if (editIsOrdered === 1) {
+            targetStage = 99;
+        } else if (editIsLost === 1) {
+            targetStage = 0;
+        }
+
+        // editStage 상태 동기화 및 제품 라인 일괄 단계 보정
+        let updatedProducts = { ...editProducts };
+        if (editIsOrdered === 1 || editIsLost === 1) {
+            const newEditProducts = {};
+            for (const [groupName, prods] of Object.entries(editProducts)) {
+                if (Array.isArray(prods)) {
+                    newEditProducts[groupName] = prods.map((p) => ({
+                        ...p,
+                        stage: targetStage,
+                    }));
+                } else {
+                    newEditProducts[groupName] = prods;
+                }
+            }
+            updatedProducts = newEditProducts;
+        }
+
         // [적합성 검사]
         if (!editProjectName.trim()) {
             setToast({ message: "사업명을 입력해주세요.", type: "error" });
@@ -731,7 +756,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
         // [제품 목록 적합성 검사]
         let hasProduct = false;
-        for (const [groupName, prods] of Object.entries(editProducts)) {
+        for (const [groupName, prods] of Object.entries(updatedProducts)) {
             if (Array.isArray(prods)) {
                 if (prods.length > 0) {
                     hasProduct = true;
@@ -773,7 +798,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         }
 
         // 저장하기 직전에 화면에 보여지는 실시간 계산값들을 배열에 완전히 덮어씌웁니다.
-        const finalProducts = getFinalProducts(editProducts, calcMode);
+        const finalProducts = getFinalProducts(updatedProducts, calcMode);
 
         // 수정 저장 시에도 빈 칸으로 남겨진 비고(Notes)를 깔끔하게 걸러냅니다.
         const finalEditNotes = editNotes
@@ -790,7 +815,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 projectName: editProjectName,
                 isOrdered: editIsOrdered,
                 isLost: editIsLost,
-                stage: editStage,
+                stage: targetStage,
                 originalUpdatedAt: editOriginalUpdatedAt,
                 defaultGroup: editDefaultGroup,
             },
@@ -1520,28 +1545,25 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                             <label className="text-xs font-medium text-gray-500">
                                                                                 단계 (%)
                                                                             </label>
-                                                                            <input
-                                                                                type="number"
+                                                                            <select
                                                                                 value={editStage}
-                                                                                onFocus={(e) => {
-                                                                                    prevStageValRef.current = Number(e.target.value) || 10;
-                                                                                }}
-                                                                                onChange={(e) => setEditStage(Number(e.target.value) || 0)}
-                                                                                onBlur={(e) => {
-                                                                                    const newVal = Number(e.target.value) || 0;
-                                                                                    if (newVal === prevStageValRef.current) return;
+                                                                                onChange={(e) => {
+                                                                                    const newVal = Number(e.target.value);
+                                                                                    const prevVal = editStage;
+                                                                                    setEditStage(newVal);
                                                                                     const success = updateAllProductsStage(newVal);
                                                                                     if (!success) {
-                                                                                        setEditStage(prevStageValRef.current);
-                                                                                    }
-                                                                                }}
-                                                                                onKeyDown={(e) => {
-                                                                                    if (e.key === "Enter") {
-                                                                                        e.currentTarget.blur();
+                                                                                        setEditStage(prevVal);
                                                                                     }
                                                                                 }}
                                                                                 className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
-                                                                            />
+                                                                            >
+                                                                                {[0, 10, 25, 50, 75, 99, 100].map((val) => (
+                                                                                    <option key={val} value={val}>
+                                                                                        {val}%
+                                                                                    </option>
+                                                                                ))}
+                                                                            </select>
                                                                         </div>
                                                                         <div className="flex items-center gap-4 mt-2">
                                                                             <div className="flex items-center gap-2">
@@ -1551,20 +1573,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                 <input
                                                                                     type="checkbox"
                                                                                     checked={
-                                                                                        editIsOrdered ===
-                                                                                        1
+                                                                                        editIsOrdered === 1
                                                                                     }
-                                                                                    onChange={(
-                                                                                        e,
-                                                                                    ) =>
-                                                                                        setEditIsOrdered(
-                                                                                            e
-                                                                                                .target
-                                                                                                .checked
-                                                                                                ? 1
-                                                                                                : 0,
-                                                                                        )
-                                                                                    }
+                                                                                    onChange={(e) => {
+                                                                                        const checked = e.target.checked;
+                                                                                        setEditIsOrdered(checked ? 1 : 0);
+                                                                                        if (checked) {
+                                                                                            setEditIsLost(0);
+                                                                                            setEditStage(99);
+                                                                                            updateAllProductsStage(99);
+                                                                                        }
+                                                                                    }}
                                                                                     className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
                                                                                 />
                                                                             </div>
@@ -1575,20 +1594,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                 <input
                                                                                     type="checkbox"
                                                                                     checked={
-                                                                                        editIsLost ===
-                                                                                        1
+                                                                                        editIsLost === 1
                                                                                     }
-                                                                                    onChange={(
-                                                                                        e,
-                                                                                    ) =>
-                                                                                        setEditIsLost(
-                                                                                            e
-                                                                                                .target
-                                                                                                .checked
-                                                                                                ? 1
-                                                                                                : 0,
-                                                                                        )
-                                                                                    }
+                                                                                    onChange={(e) => {
+                                                                                        const checked = e.target.checked;
+                                                                                        setEditIsLost(checked ? 1 : 0);
+                                                                                        if (checked) {
+                                                                                            setEditIsOrdered(0);
+                                                                                            setEditStage(0);
+                                                                                            updateAllProductsStage(0);
+                                                                                        }
+                                                                                    }}
                                                                                     className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
                                                                                 />
                                                                             </div>

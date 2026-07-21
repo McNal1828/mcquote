@@ -12,7 +12,6 @@ import {
     PlusCircle,
     Edit3,
     CheckCircle,
-    AlertTriangle,
     Clock,
 } from "lucide-react";
 import {
@@ -37,7 +36,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const endYearParam = url.searchParams.get("endYear");
     const endMonthParam = url.searchParams.get("endMonth");
 
-    const now = new Date();
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
     const curYear = now.getFullYear();
     const curMonth = now.getMonth() + 1;
 
@@ -427,8 +426,10 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
     // 차트용 커스텀 툴팁
     const CustomTooltip = ({ active, payload, label }: any) => {
         if (active && payload && payload.length) {
-            const supplyVal = payload[0]?.value || 0;
-            const marginVal = payload[1]?.value || 0;
+            const supplyItem = payload.find((p: any) => p.dataKey === "supplyPriceSum");
+            const marginItem = payload.find((p: any) => p.dataKey === "marginSum");
+            const supplyVal = supplyItem?.value || 0;
+            const marginVal = marginItem?.value || 0;
             const marginRate = supplyVal > 0 ? ((marginVal / supplyVal) * 100).toFixed(1) : "0.0";
 
             return (
@@ -437,11 +438,11 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                         {label}월
                     </p>
                     <div className="flex flex-col gap-1.5 text-xs">
-                        <p className="text-blue-600 dark:text-blue-400 font-medium">
-                            매출액: {formatCurrency(supplyVal)} ({formatCurrencyBrief(supplyVal)})
-                        </p>
                         <p className="text-emerald-600 dark:text-emerald-400 font-medium">
                             마진액: {formatCurrency(marginVal)} ({formatCurrencyBrief(marginVal)})
+                        </p>
+                        <p className="text-blue-600 dark:text-blue-400 font-medium">
+                            매출액: {formatCurrency(supplyVal)} ({formatCurrencyBrief(supplyVal)})
                         </p>
                         <p className="text-purple-600 dark:text-purple-400 font-semibold border-t dark:border-gray-700 pt-1.5 mt-1">
                             마진율 (매출 대비): {marginRate}%
@@ -615,16 +616,16 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                                 />
                                 <Legend />
                                 <Bar
-                                    dataKey="supplyPriceSum"
-                                    name="매출액"
-                                    fill="#3b82f6"
+                                    dataKey="marginSum"
+                                    name="마진액"
+                                    fill="#10b981"
                                     radius={[4, 4, 0, 0]}
                                     maxBarSize={30}
                                 />
                                 <Bar
-                                    dataKey="marginSum"
-                                    name="마진액"
-                                    fill="#10b981"
+                                    dataKey="supplyPriceSum"
+                                    name="매출액"
+                                    fill="#3b82f6"
                                     radius={[4, 4, 0, 0]}
                                     maxBarSize={30}
                                 />
