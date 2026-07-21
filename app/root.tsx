@@ -27,6 +27,7 @@ import {
     Moon,
     LogIn,
     TrendingUp,
+    Coins,
 } from "lucide-react";
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -66,6 +67,7 @@ const navItems = [
     { path: "/dist", label: "총판 담당자 목록", icon: UserCheck },
     { path: "/stats", label: "견적 통계", icon: BarChart3 },
     { path: "/stats_revenue", label: "매출 통계", icon: TrendingUp },
+    { path: "/exchange_rate", label: "환율 관리", icon: Coins },
 ];
 
 // 1. 보안이 강화된 HTTP-Only 쿠키 설정

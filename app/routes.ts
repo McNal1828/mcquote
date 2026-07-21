@@ -14,4 +14,5 @@ export default [
     route("stats", "routes/stats_partner.tsx"),
     route("stats_revenue", "routes/stats_revenue.tsx"),
     route("history/:id", "routes/history.tsx"),
+    route("exchange_rate", "routes/exchange_rate.tsx"),
 ] satisfies RouteConfig;

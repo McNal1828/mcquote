@@ -522,7 +522,11 @@ export async function loader({ request }: Route.LoaderArgs) {
     );
     const masterProducts = productsStmt.all();
 
-    return { quotes, masterProducts, pagination: { page, totalPages, total } };
+    // 가장 최신 환율 정보 조회
+    const lastRateRow = db.prepare("SELECT rate FROM exchange_rate ORDER BY timestamp DESC LIMIT 1").get() as { rate: number } | undefined;
+    const defaultExchangeRate = lastRateRow ? lastRateRow.rate : 0;
+
+    return { quotes, masterProducts, pagination: { page, totalPages, total }, defaultExchangeRate };
 }
 
 interface GroupNameInputProps {
@@ -561,6 +565,7 @@ function GroupNameInput({ value, onRename }: GroupNameInputProps) {
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
+    const { defaultExchangeRate } = loaderData;
     const fetcher = useFetcher();
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -893,7 +898,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             const newGroupName = `원가표${idx}`;
             return {
                 ...prev,
-                [newGroupName]: [createEmptyProductRow()],
+                [newGroupName]: [createEmptyProductRow(defaultExchangeRate)],
             };
         });
     };
@@ -963,7 +968,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             ...prev,
             [groupName]: [
                 ...(prev[groupName] || []),
-                createEmptyProductRow(),
+                createEmptyProductRow(defaultExchangeRate),
             ],
         }));
     };

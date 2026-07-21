@@ -33,7 +33,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const products = stmt.all();
 
     const partners = db
-        .prepare("SELECT id, name FROM partners ORDER BY name ASC")
+        .prepare("SELECT id, name, vendor FROM partners WHERE available = 1 ORDER BY name ASC")
         .all();
     const partnerContacts = db
         .prepare(
@@ -48,7 +48,12 @@ export async function loader({ request }: Route.LoaderArgs) {
             "SELECT id, name, position FROM dist_contacts ORDER BY name ASC",
         )
         .all();
-    return { products, partners, partnerContacts, ams, distContacts };
+
+    // 가장 최신 환율 정보 조회
+    const lastRateRow = db.prepare("SELECT rate FROM exchange_rate ORDER BY timestamp DESC LIMIT 1").get() as { rate: number } | undefined;
+    const defaultExchangeRate = lastRateRow ? lastRateRow.rate : 0;
+
+    return { products, partners, partnerContacts, ams, distContacts, defaultExchangeRate };
 }
 
 export async function action({ request }: Route.ActionArgs) {
@@ -305,6 +310,8 @@ function SearchableSelect({ label, options, value, placeholder, onChange }: Sear
 }
 
 export default function Quoting({ loaderData }: Route.ComponentProps) {
+    const { defaultExchangeRate } = loaderData;
+
     const submit = useSubmit();
     const actionData = useActionData<{ error?: string; success?: boolean }>();
     const navigation = useNavigation();
@@ -331,7 +338,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
 
     // 2. 제품 상세 목록 상태 관리
     const [products, setProducts] = useState<Record<string, any[]>>({
-        "원가표1": [createEmptyProductRow()],
+        "원가표1": [createEmptyProductRow(defaultExchangeRate)],
     });
 
     // 3. 비고 상태 관리
@@ -396,7 +403,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 vendor: value,
                 amId: "",
             }));
-            setProducts({ "원가표1": [createEmptyProductRow()] });
+            setProducts({ "원가표1": [createEmptyProductRow(defaultExchangeRate)] });
             return;
         }
         setBasicInfo((prev) => {
@@ -437,7 +444,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 amId: "",
             };
         });
-        setProducts({ "원가표1": [createEmptyProductRow()] });
+        setProducts({ "원가표1": [createEmptyProductRow(defaultExchangeRate)] });
         setDefaultGroup("원가표1");
     };
 
@@ -451,7 +458,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             const newGroupName = `원가표${idx}`;
             return {
                 ...prev,
-                [newGroupName]: [createEmptyProductRow()],
+                [newGroupName]: [createEmptyProductRow(defaultExchangeRate)],
             };
         });
     };
@@ -509,7 +516,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             ...prev,
             [groupName]: [
                 ...(prev[groupName] || []),
-                createEmptyProductRow(),
+                createEmptyProductRow(defaultExchangeRate),
             ],
         }));
     };
@@ -923,7 +930,11 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                         </h4>
                         <SearchableSelect
                             label="파트너사명"
-                            options={loaderData.partners as any[]}
+                            options={(loaderData.partners as any[] || []).filter(
+                                (p: any) =>
+                                    !basicInfo.vendor ||
+                                    (p.vendor ? p.vendor.split(",").includes(basicInfo.vendor) : false)
+                            )}
                             value={basicInfo.partnerId}
                             placeholder="파트너사 선택"
                             onChange={(val) => updateBasicInfoValue("partnerId", val)}

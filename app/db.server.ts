@@ -27,7 +27,18 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS partners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT, -- 이름
-    grade TEXT -- 등급
+    grade TEXT, -- 등급
+    vendor TEXT, -- 벤더 (Broadcom, Omnissa 쉼표 구분 복수 저장)
+    available INTEGER DEFAULT 1 -- 사용 가능 여부 (1: 사용중, 0: 삭제됨)
+  );
+`);
+
+// 2-2. 환율 테이블 생성
+db.exec(`
+  CREATE TABLE IF NOT EXISTS exchange_rate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rate REAL NOT NULL,
+    timestamp INTEGER NOT NULL
   );
 `);
 

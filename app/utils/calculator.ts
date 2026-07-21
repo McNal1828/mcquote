@@ -81,7 +81,7 @@ export function getFinalProducts(
 }
 
 // 빈 제품 행 객체를 생성하는 공통 팩토리 함수
-export function createEmptyProductRow() {
+export function createEmptyProductRow(defaultRate?: number) {
     return {
         제품코드: "",
         제품설명: "",
@@ -90,7 +90,7 @@ export function createEmptyProductRow() {
         수량: 1,
         기간: 1,
         DC달러: 0,
-        환율: 0,
+        환율: defaultRate || 0,
         DC원화: 0,
         공급가: 0,
         마진: 0,
