@@ -3,6 +3,7 @@ import { useFetcher } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/dist";
 import { useTableFeatures } from "./useTableFeatures";
+import { logger } from "~/utils/logger";
 import {
     Plus,
     Save,
@@ -33,6 +34,8 @@ export async function action({ request }: Route.ActionArgs) {
     const name = formData.get("name") as string;
     const position = (formData.get("position") as string) || "";
 
+    logger.info(`[Dist Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
+
     if (intent === "add") {
         if (!name) {
             return { error: "총판 담당자 이름이 필요합니다.", intent: "add" };
@@ -42,8 +45,10 @@ export async function action({ request }: Route.ActionArgs) {
                 "INSERT INTO dist_contacts (name, position, available) VALUES (?, ?, 1)",
             );
             stmt.run(name, position);
+            logger.info(`[Dist Action] Dist contact ${name} added successfully.`);
             return { success: true, intent: "add" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Dist Action] Failed to add dist contact ${name}: ${error.stack || error.message}`);
             return { error: "추가 중 오류가 발생했습니다.", intent: "add" };
         }
     } else if (intent === "delete") {
@@ -53,8 +58,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE dist_contacts SET available = 0 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[Dist Action] Dist contact ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Dist Action] Failed to archive dist contact ID ${id}: ${error.stack || error.message}`);
             return { error: "삭제 중 오류가 발생했습니다.", intent: "delete" };
         }
     } else if (intent === "restore") {
@@ -64,8 +71,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE dist_contacts SET available = 1 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[Dist Action] Dist contact ID ${id} restored (available = 1) successfully.`);
             return { success: true, intent: "restore" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Dist Action] Failed to restore dist contact ID ${id}: ${error.stack || error.message}`);
             return { error: "복구 중 오류가 발생했습니다.", intent: "restore" };
         }
     } else if (intent === "edit") {
@@ -77,11 +86,14 @@ export async function action({ request }: Route.ActionArgs) {
                 "UPDATE dist_contacts SET name = ?, position = ? WHERE id = ?",
             );
             stmt.run(name, position, Number(id));
+            logger.info(`[Dist Action] Dist contact ID ${id} edited successfully.`);
             return { success: true, intent: "edit" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Dist Action] Failed to edit dist contact ID ${id}: ${error.stack || error.message}`);
             return { error: "수정 중 오류가 발생했습니다.", intent: "edit" };
         }
     }
+    logger.warn(`[Dist Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
 

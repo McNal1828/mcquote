@@ -3,6 +3,7 @@ import { useFetcher } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/ams";
 import { useTableFeatures } from "./useTableFeatures";
+import { logger } from "~/utils/logger";
 import {
     Plus,
     Save,
@@ -61,6 +62,8 @@ export async function action({ request }: Route.ActionArgs) {
         .filter(Boolean);
     const assigned_clients_json = JSON.stringify(clientsArray);
 
+    logger.info(`[AMs Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
+
     if (intent === "add") {
         if (!name) {
             return { error: "AM 이름이 필요합니다.", intent: "add" };
@@ -79,8 +82,10 @@ export async function action({ request }: Route.ActionArgs) {
                 assigned_clients_json,
                 vendor,
             );
+            logger.info(`[AMs Action] AM ${name} added successfully.`);
             return { success: true, intent: "add" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[AMs Action] Failed to add AM ${name}: ${error.stack || error.message}`);
             return { error: "추가 중 오류가 발생했습니다.", intent: "add" };
         }
     } else if (intent === "delete") {
@@ -90,8 +95,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE ams SET available = 0 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[AMs Action] AM ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[AMs Action] Failed to archive AM ID ${id}: ${error.stack || error.message}`);
             return { error: "삭제 중 오류가 발생했습니다.", intent: "delete" };
         }
     } else if (intent === "restore") {
@@ -101,8 +108,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE ams SET available = 1 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[AMs Action] AM ID ${id} restored (available = 1) successfully.`);
             return { success: true, intent: "restore" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[AMs Action] Failed to restore AM ID ${id}: ${error.stack || error.message}`);
             return { error: "복구 중 오류가 발생했습니다.", intent: "restore" };
         }
     } else if (intent === "edit") {
@@ -125,11 +134,14 @@ export async function action({ request }: Route.ActionArgs) {
                 vendor,
                 Number(id),
             );
+            logger.info(`[AMs Action] AM ID ${id} edited successfully.`);
             return { success: true, intent: "edit" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[AMs Action] Failed to edit AM ID ${id}: ${error.stack || error.message}`);
             return { error: "수정 중 오류가 발생했습니다.", intent: "edit" };
         }
     }
+    logger.warn(`[AMs Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
 

@@ -6,6 +6,7 @@ import { sendGasRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/home";
 import db from "../db.server";
+import { logger } from "~/utils/logger";
 import {
     Search,
     Calendar,
@@ -66,8 +67,11 @@ export async function action({ request }: Route.ActionArgs) {
         stage,
     } = data;
 
+    logger.info(`[Home Action] Received request: intent=${intent}, quoteId=${quoteId}`);
+
     if (intent === "delete") {
         try {
+            logger.info(`[Home Action] Deleting Quote ID: ${quoteId}...`);
             // [구글 시트 연동] 삭제 전에 기존 디폴트 그룹의 라인 ID를 먼저 조회해둡니다.
             const oldLines = db.prepare(`
                 SELECT ql.id 
@@ -87,9 +91,10 @@ export async function action({ request }: Route.ActionArgs) {
                 await Promise.all(deletePromises);
             }
 
+            logger.info(`[Home Action] Quote ID ${quoteId} deleted successfully and synced to Google Sheets.`);
             return { success: true, intent: "delete" };
-        } catch (error) {
-            console.error("견적 삭제 및 동기화 실패:", error);
+        } catch (error: any) {
+            logger.error(`[Home Action] Quote ID ${quoteId} delete failed: ${error.stack || error.message}`);
             return { error: "삭제 중 오류가 발생했습니다." };
         }
     }
@@ -100,6 +105,8 @@ export async function action({ request }: Route.ActionArgs) {
             const targetStage = Number(stage);
             const targetIsOrdered = Number(isOrdered) || 0;
             const targetIsLost = Number(isLost) || 0;
+
+            logger.info(`[Home Action] Updating stage for Quote ID: ${targetQuoteId} to ${targetStage}% (Ordered: ${targetIsOrdered}, Lost: ${targetIsLost})...`);
 
             // 1. 구글 시트 연동을 위해 해당 견적 디폴트 그룹의 라인 ID 리스트를 미리 조회합니다.
             const defaultLines = db.prepare(`
@@ -135,9 +142,10 @@ export async function action({ request }: Route.ActionArgs) {
                 await Promise.all(updatePromises);
             }
 
+            logger.info(`[Home Action] Quote ID ${targetQuoteId} stage updated to ${targetStage}% and synced to Google Sheets.`);
             return { success: true, intent: "updateStage" };
-        } catch (error) {
-            console.error("빠른 단계 변경 동기화 실패:", error);
+        } catch (error: any) {
+            logger.error(`[Home Action] Quick stage update for Quote ID ${quoteId} failed: ${error.stack || error.message}`);
             return { error: "단계 변경 중 오류가 발생했습니다." };
         }
     }
@@ -146,6 +154,7 @@ export async function action({ request }: Route.ActionArgs) {
     const now = Date.now();
 
     try {
+        logger.info(`[Home Action] Editing Quote ID: ${quoteId}...`);
         // 기존 products_history 조회 및 파싱
         const currentQuote = db.prepare("SELECT products_history FROM quotes WHERE id = ?").get(quoteId) as any;
         let historyList = [];
@@ -401,14 +410,16 @@ export async function action({ request }: Route.ActionArgs) {
             await Promise.all(syncPromises);
         }
 
+        logger.info(`[Home Action] Quote ID ${quoteId} edited and synced to Google Sheets successfully.`);
         return { success: true, intent: "edit" };
     } catch (error: any) {
         if (error.message === "CONCURRENCY_ERROR") {
+            logger.warn(`[Home Action] Concurrency conflict on Quote ID ${quoteId} update. Blocked.`);
             return {
                 error: "다른 사용자가 방금 이 견적을 수정했거나 삭제했습니다. 덮어쓰기를 방지하기 위해 저장이 취소되었습니다. 새로고침 후 다시 시도해주세요.",
             };
         }
-        console.error("업데이트 에러:", error);
+        logger.error(`[Home Action] Quote ID ${quoteId} edit failed: ${error.stack || error.message}`);
         return { error: "업데이트 중 오류가 발생했습니다." };
     }
 }

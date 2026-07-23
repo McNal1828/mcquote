@@ -3,6 +3,7 @@ import { useFetcher } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/products";
 import { useTableFeatures } from "./useTableFeatures";
+import { logger } from "~/utils/logger";
 import {
     Plus,
     Save,
@@ -37,6 +38,8 @@ export async function action({ request }: Route.ActionArgs) {
     const lpw = formData.get("lpw");
     const vendor = formData.get("vendor");
 
+    logger.info(`[Products Action] Received intent: ${intent}, ID: ${id}, Code: ${code}`);
+
     // intent 값에 따라 DB 작업을 분기합니다.
     if (intent === "add") {
         if (!code) {
@@ -48,8 +51,10 @@ export async function action({ request }: Route.ActionArgs) {
                 VALUES (?, ?, ?, ?, ?, 1)
             `);
             stmt.run(code, description, Number(lpd), Number(lpw), vendor || "");
+            logger.info(`[Products Action] Product Code ${code} added successfully.`);
             return { success: true, intent: "add" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Products Action] Failed to add Product Code ${code}: ${error.stack || error.message}`);
             return {
                 error: "제품 추가 중 오류가 발생했습니다. (코드가 이미 존재할 수 있습니다.)",
                 intent: "add",
@@ -62,8 +67,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE products SET available = 0 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[Products Action] Product ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Products Action] Failed to archive Product ID ${id}: ${error.stack || error.message}`);
             return {
                 error: "제품 삭제 중 오류가 발생했습니다.",
                 intent: "delete",
@@ -76,8 +83,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE products SET available = 1 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[Products Action] Product ID ${id} restored (available = 1) successfully.`);
             return { success: true, intent: "restore" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Products Action] Failed to restore Product ID ${id}: ${error.stack || error.message}`);
             return {
                 error: "제품 복구 중 오류가 발생했습니다.",
                 intent: "restore",
@@ -95,8 +104,10 @@ export async function action({ request }: Route.ActionArgs) {
                 WHERE id = ?
             `);
             stmt.run(description, Number(lpd), Number(lpw), vendor || "", Number(id));
+            logger.info(`[Products Action] Product ID ${id} edited successfully.`);
             return { success: true, intent: "edit" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Products Action] Failed to edit Product ID ${id}: ${error.stack || error.message}`);
             return {
                 error: "업데이트 중 오류가 발생했습니다.",
                 intent: "edit",

@@ -3,6 +3,7 @@ import { useFetcher } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/partners";
 import { useTableFeatures } from "./useTableFeatures";
+import { logger } from "~/utils/logger";
 import {
     Plus,
     Save,
@@ -33,6 +34,8 @@ export async function action({ request }: Route.ActionArgs) {
     const vendorList = formData.getAll("vendor") as string[];
     const vendor = vendorList.join(",");
 
+    logger.info(`[Partners Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
+
     if (intent === "add") {
         if (!name) {
             return { error: "파트너사 이름이 필요합니다.", intent: "add" };
@@ -42,8 +45,10 @@ export async function action({ request }: Route.ActionArgs) {
                 "INSERT INTO partners (name, grade, available, vendor) VALUES (?, ?, 1, ?)",
             );
             stmt.run(name, grade || "", vendor);
+            logger.info(`[Partners Action] Partner ${name} added successfully.`);
             return { success: true, intent: "add" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Partners Action] Failed to add Partner ${name}: ${error.stack || error.message}`);
             return { error: "추가 중 오류가 발생했습니다.", intent: "add" };
         }
     } else if (intent === "delete") {
@@ -53,8 +58,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE partners SET available = 0 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[Partners Action] Partner ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Partners Action] Failed to archive Partner ID ${id}: ${error.stack || error.message}`);
             return { error: "삭제 중 오류가 발생했습니다.", intent: "delete" };
         }
     } else if (intent === "restore") {
@@ -64,8 +71,10 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const stmt = db.prepare("UPDATE partners SET available = 1 WHERE id = ?");
             stmt.run(Number(id));
+            logger.info(`[Partners Action] Partner ID ${id} restored (available = 1) successfully.`);
             return { success: true, intent: "restore" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Partners Action] Failed to restore Partner ID ${id}: ${error.stack || error.message}`);
             return { error: "복구 중 오류가 발생했습니다.", intent: "restore" };
         }
     } else if (intent === "edit") {
@@ -80,11 +89,14 @@ export async function action({ request }: Route.ActionArgs) {
                 "UPDATE partners SET name = ?, grade = ?, vendor = ? WHERE id = ?",
             );
             stmt.run(name, grade || "", vendor, Number(id));
+            logger.info(`[Partners Action] Partner ID ${id} edited successfully.`);
             return { success: true, intent: "edit" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Partners Action] Failed to edit Partner ID ${id}: ${error.stack || error.message}`);
             return { error: "수정 중 오류가 발생했습니다.", intent: "edit" };
         }
     }
+    logger.warn(`[Partners Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
 

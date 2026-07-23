@@ -3,6 +3,7 @@ import { Form, useActionData, useNavigation } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/exchange_rate";
 import { TrendingUp, Coins, Save, CheckCircle2, AlertCircle } from "lucide-react";
+import { logger } from "~/utils/logger";
 
 export function shouldRevalidate() {
     return true;
@@ -30,6 +31,8 @@ export async function action({ request }: Route.ActionArgs) {
     const formData = await request.formData();
     const rateStr = formData.get("rate");
     
+    logger.info(`[Exchange Rate Action] Requested update with rate: ${rateStr}`);
+
     if (!rateStr) {
         return { error: "환율 값을 입력해 주세요." };
     }
@@ -42,8 +45,10 @@ export async function action({ request }: Route.ActionArgs) {
     try {
         const stmt = db.prepare("INSERT INTO exchange_rate (rate, timestamp) VALUES (?, ?)");
         stmt.run(rate, Date.now());
+        logger.info(`[Exchange Rate Action] Rate updated successfully to: ${rate}`);
         return { success: true };
-    } catch (err) {
+    } catch (err: any) {
+        logger.error(`[Exchange Rate Action] Failed to update rate to ${rate}: ${err.stack || err.message}`);
         return { error: "데이터베이스 저장 중 오류가 발생했습니다." };
     }
 }

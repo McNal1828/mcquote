@@ -1,5 +1,6 @@
 import type { Route } from "./+types/api.mod";
 import db from "../db.server";
+import { logger } from "~/utils/logger";
 
 const SECRET_API_KEY = "dptmeldkdltkdjqqnqlalfqjsgh";
 
@@ -17,6 +18,7 @@ export async function action({ request }: Route.ActionArgs) {
 
         // 🔒 [보안 인증 키 검증]
         if (!apiKey || apiKey !== SECRET_API_KEY) {
+            logger.warn(`[Google Sheets Webhook Sync] Unauthorized access attempt with invalid key`);
             return new Response(JSON.stringify({ error: "Unauthorized" }), {
                 status: 401,
                 headers: { "Content-Type": "application/json" },
@@ -54,15 +56,15 @@ export async function action({ request }: Route.ActionArgs) {
             */
         })();
 
-        console.log(`[Google Sheets Webhook Sync Success] Line ID: ${id} | Price: ${supplyPrice} | Margin: ${margin} | Stage: ${stage}%`);
+        logger.info(`[Google Sheets Webhook Sync Success] Line ID: ${id} | Price: ${supplyPrice} | Margin: ${margin} | Stage: ${stage}%`);
 
         return new Response(JSON.stringify({ success: true, message: "Sync successful" }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
         });
     } catch (error: any) {
-        console.error("[Google Sheets Webhook Sync Failed]:", error);
-        return new Response(JSON.stringify({ error: error.message }), {
+        logger.error(`[Google Sheets Webhook Sync Failed]: ${error.stack || error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
             status: 500,
             headers: { "Content-Type": "application/json" },
         });

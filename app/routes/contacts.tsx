@@ -3,6 +3,7 @@ import { useFetcher } from "react-router";
 import db from "../db.server";
 import type { Route } from "./+types/contacts";
 import { useTableFeatures } from "./useTableFeatures";
+import { logger } from "~/utils/logger";
 import {
     Plus,
     Save,
@@ -56,6 +57,8 @@ export async function action({ request }: Route.ActionArgs) {
     const email = (formData.get("email") as string) || "";
     const phone = (formData.get("phone") as string) || "";
 
+    logger.info(`[Contacts Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
+
     if (intent === "add") {
         if (!partner_id || !name) {
             return {
@@ -76,8 +79,10 @@ export async function action({ request }: Route.ActionArgs) {
                 email,
                 phone,
             );
+            logger.info(`[Contacts Action] Contact ${name} added successfully for Partner ID ${partner_id}.`);
             return { success: true, intent: "add" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Contacts Action] Failed to add contact ${name}: ${error.stack || error.message}`);
             return { error: "추가 중 오류가 발생했습니다.", intent: "add" };
         }
     } else if (intent === "delete") {
@@ -89,8 +94,10 @@ export async function action({ request }: Route.ActionArgs) {
                 "UPDATE partner_contacts SET available = 0 WHERE id = ?",
             );
             stmt.run(Number(id));
+            logger.info(`[Contacts Action] Contact ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Contacts Action] Failed to archive contact ID ${id}: ${error.stack || error.message}`);
             return { error: "삭제 중 오류가 발생했습니다.", intent: "delete" };
         }
     } else if (intent === "restore") {
@@ -102,8 +109,10 @@ export async function action({ request }: Route.ActionArgs) {
                 "UPDATE partner_contacts SET available = 1 WHERE id = ?",
             );
             stmt.run(Number(id));
+            logger.info(`[Contacts Action] Contact ID ${id} restored (available = 1) successfully.`);
             return { success: true, intent: "restore" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Contacts Action] Failed to restore contact ID ${id}: ${error.stack || error.message}`);
             return { error: "복구 중 오류가 발생했습니다.", intent: "restore" };
         }
     } else if (intent === "edit") {
@@ -128,11 +137,14 @@ export async function action({ request }: Route.ActionArgs) {
                 phone,
                 Number(id),
             );
+            logger.info(`[Contacts Action] Contact ID ${id} edited successfully.`);
             return { success: true, intent: "edit" };
-        } catch (error) {
+        } catch (error: any) {
+            logger.error(`[Contacts Action] Failed to edit contact ID ${id}: ${error.stack || error.message}`);
             return { error: "수정 중 오류가 발생했습니다.", intent: "edit" };
         }
     }
+    logger.warn(`[Contacts Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
 
