@@ -1,4 +1,4 @@
-const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwETb_G_6yybpwZa1v43XL9QQnywtTxrEoY7pKuweYsvhnqKFn8R2hCTT19ydDBW5QIUA/exec";
+const GAS_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbwXV1VU05F7eUKwC241w0KRb3_jYOIzvw5b1BR0nZRUSQCvMXwcKAtBVr_Jo35d0KYb9g/exec";
 
 export interface GasRowPayload {
     id: number;       // SQLite DB에서 취득한 quote_lines.id 고유키

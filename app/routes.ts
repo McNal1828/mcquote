@@ -6,6 +6,7 @@ export default [
     route("api/download", "routes/api.download.ts"),
     route("api/home/download", "routes/api.home.download.ts"),
     route("quoting", "routes/quoting.tsx"),
+    route("api/mod", "routes/api.mod.ts"),
     route("ams", "routes/ams.tsx"),
     route("partners", "routes/partners.tsx"),
     route("products", "routes/products.tsx"),

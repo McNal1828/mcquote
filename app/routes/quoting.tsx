@@ -186,7 +186,7 @@ export async function action({ request }: Route.ActionArgs) {
                             id: Number(lineInfo.lastInsertRowid),
                             년차: Number(line.년차) || 1,
                             매출월: Number(line.매출월) || 1,
-                            stage: Number(line.stage) / 100 || 0.1,
+                            stage: line.stage !== undefined && line.stage !== null && line.stage !== "" ? (Number(line.stage) / 100) : 0.1,
                             공급가: Number(line.공급가) || 0,
                             마진: Number(line.마진) || 0,
                             lpd: Number(line.lpd) || 0,

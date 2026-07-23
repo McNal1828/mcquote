@@ -2,6 +2,7 @@ import { useState, Fragment, useEffect, useRef } from "react";
 import { useFetcher, useSearchParams, Link } from "react-router";
 import crypto from "crypto";
 import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
+import { sendGasRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/home";
 import db from "../db.server";
@@ -67,11 +68,77 @@ export async function action({ request }: Route.ActionArgs) {
 
     if (intent === "delete") {
         try {
+            // [구글 시트 연동] 삭제 전에 기존 디폴트 그룹의 라인 ID를 먼저 조회해둡니다.
+            const oldLines = db.prepare(`
+                SELECT ql.id 
+                FROM quote_lines ql
+                JOIN quote_groups qg ON ql.group_id = qg.id
+                WHERE qg.quote_id = ? AND qg."default" = 1
+            `).all(Number(quoteId)) as Array<{ id: number }>;
+
             const stmt = db.prepare("DELETE FROM quotes WHERE id = ?");
             stmt.run(quoteId);
+
+            // DB 커밋 성공 후 구글 시트에서 기존 라인 병렬 삭제 요청
+            if (oldLines.length > 0) {
+                const deletePromises = oldLines.map((line) => {
+                    return sendGasRequest("delete", { id: line.id });
+                });
+                await Promise.all(deletePromises);
+            }
+
             return { success: true, intent: "delete" };
         } catch (error) {
+            console.error("견적 삭제 및 동기화 실패:", error);
             return { error: "삭제 중 오류가 발생했습니다." };
+        }
+    }
+
+    if (intent === "updateStage") {
+        try {
+            const targetQuoteId = Number(quoteId);
+            const targetStage = Number(stage);
+            const targetIsOrdered = Number(isOrdered) || 0;
+            const targetIsLost = Number(isLost) || 0;
+
+            // 1. 구글 시트 연동을 위해 해당 견적 디폴트 그룹의 라인 ID 리스트를 미리 조회합니다.
+            const defaultLines = db.prepare(`
+                SELECT ql.id 
+                FROM quote_lines ql
+                JOIN quote_groups qg ON ql.group_id = qg.id
+                WHERE qg.quote_id = ? AND qg."default" = 1
+            `).all(targetQuoteId) as Array<{ id: number }>;
+
+            // 2. DB 업데이트 수행 (수식 정보 보존을 위해 오직 stage 및 상태 플래그만 단독 수정)
+            db.transaction(() => {
+                db.prepare(`
+                    UPDATE quotes 
+                    SET stage = ?, is_ordered = ?, is_lost = ?, updated_at = ?
+                    WHERE id = ?
+                `).run(targetStage, targetIsOrdered, targetIsLost, Date.now(), targetQuoteId);
+
+                db.prepare(`
+                    UPDATE quote_lines 
+                    SET stage = ?
+                    WHERE group_id IN (SELECT id FROM quote_groups WHERE quote_id = ?)
+                `).run(targetStage, targetQuoteId);
+            })();
+
+            // 3. 구글 시트 단독 업데이트 (update) 요청 병렬 송신
+            if (defaultLines.length > 0) {
+                const updatePromises = defaultLines.map((line) => {
+                    return sendGasRequest("update", {
+                        id: line.id,
+                        stage: targetStage / 100 // 백분율 환산 (50% -> 0.5)
+                    });
+                });
+                await Promise.all(updatePromises);
+            }
+
+            return { success: true, intent: "updateStage" };
+        } catch (error) {
+            console.error("빠른 단계 변경 동기화 실패:", error);
+            return { error: "단계 변경 중 오류가 발생했습니다." };
         }
     }
 
@@ -150,6 +217,28 @@ export async function action({ request }: Route.ActionArgs) {
         }
         const products_history = JSON.stringify(historyList);
 
+        // [구글 시트 연동] DB 수정 전 기존 디폴트 그룹의 라인 ID를 선조회 백업합니다.
+        const oldLines = db.prepare(`
+            SELECT ql.id 
+            FROM quote_lines ql
+            JOIN quote_groups qg ON ql.group_id = qg.id
+            WHERE qg.quote_id = ? AND qg."default" = 1
+        `).all(Number(quoteId)) as Array<{ id: number }>;
+
+        // 구글 시트에 새로 추가하기 위해 임시 수집할 대상을 담는 배열
+        const defaultLinesToSync: Array<{
+            id: number;
+            년차: number;
+            매출월: number;
+            stage: number;
+            공급가: number;
+            마진: number;
+            lpd: number;
+            수량: number;
+            기간: number;
+            DC달러: number;
+        }> = [];
+
         db.transaction(() => {
             const stmt = db.prepare(`
                 UPDATE quotes 
@@ -207,7 +296,7 @@ export async function action({ request }: Route.ActionArgs) {
                     const productRow = selectProduct.get(productCode) as { id: number } | undefined;
                     const productId = productRow ? productRow.id : null;
 
-                    insertLine.run(
+                    const lineInfo = insertLine.run(
                         groupId,
                         index + 1,
                         productId,
@@ -225,11 +314,92 @@ export async function action({ request }: Route.ActionArgs) {
                         Number(line.년차) || 1,
                         Number(line.원화PPC) || 0,
                         Number(line.매출월) || 1,
-                        Number(line.stage) || 10
+                        line.stage !== undefined && line.stage !== null && line.stage !== "" ? Number(line.stage) : 10
                     );
+
+                    // 기본 그룹일 경우 구글 시트 동기화 대상에 수집
+                    if (isDefault) {
+                        defaultLinesToSync.push({
+                            id: Number(lineInfo.lastInsertRowid),
+                            년차: Number(line.년차) || 1,
+                            매출월: Number(line.매출월) || 1,
+                            // 0% 값 누락 방지 가드 탑재 (0.1 = 10%)
+                            stage: line.stage !== undefined && line.stage !== null && line.stage !== "" ? (Number(line.stage) / 100) : 0.1,
+                            공급가: Number(line.공급가) || 0,
+                            마진: Number(line.마진) || 0,
+                            lpd: Number(line.lpd) || 0,
+                            수량: Number(line.수량) || 1,
+                            기간: Number(line.기간) || 1,
+                            DC달러: Number(line.DC달러) || 0
+                        });
+                    }
                 });
             }
         })();
+
+        // DB 트랜잭션 커밋 완료 후 구글 스프레드시트 삭제 & 추가 진행
+        // ① 구글 시트 기존 라인 일괄 삭제 (id만 가볍게 전달)
+        if (oldLines.length > 0) {
+            const deletePromises = oldLines.map((line) => {
+                return sendGasRequest("delete", { id: line.id });
+            });
+            await Promise.all(deletePromises);
+        }
+
+        // ② 구글 시트 신규 라인 일괄 추가
+        if (defaultLinesToSync.length > 0) {
+            // 수정 데이터에는 파트너/AM 정보가 동봉되지 않으므로 DB에서 기존 실시간 메타 정보를 조회합니다.
+            const quoteMeta = db.prepare(`
+                SELECT client_company, partner_id, partner_contact_id, am_id, dist_contact_id
+                FROM quotes
+                WHERE id = ?
+            `).get(Number(quoteId)) as {
+                client_company: string;
+                partner_id: number | null;
+                partner_contact_id: number | null;
+                am_id: number | null;
+                dist_contact_id: number | null;
+            } | undefined;
+
+            const vendorRows = db.prepare(`
+                SELECT vendor FROM quote_vendors WHERE quote_id = ?
+            `).all(Number(quoteId)) as Array<{ vendor: string }>;
+            const quoteVendorCombined = vendorRows.map(r => r.vendor).join(",");
+
+            const basicInfo = {
+                partnerId: quoteMeta?.partner_id,
+                partnerContactId: quoteMeta?.partner_contact_id,
+                amId: quoteMeta?.am_id,
+                distContactId: quoteMeta?.dist_contact_id,
+                vendor: quoteVendorCombined,
+                clientCompany: quoteMeta?.client_company || ""
+            };
+
+            const partnerName = db.prepare("SELECT name FROM partners WHERE id = ?").get(Number(basicInfo.partnerId))?.name || "";
+            const contactName = db.prepare("SELECT name FROM partner_contacts WHERE id = ?").get(Number(basicInfo.partnerContactId))?.name || "";
+            const amName = db.prepare("SELECT name FROM ams WHERE id = ?").get(Number(basicInfo.amId))?.name || "";
+            const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
+
+            const syncPromises = defaultLinesToSync.map((line) => {
+                const netdollar = line.lpd * line.수량 * line.기간 * (1 - line.DC달러 / 100);
+                return sendGasRequest("add", {
+                    id: line.id,
+                    year: line.년차,
+                    month: line.매출월,
+                    vendor: basicInfo.vendor || "",
+                    dist: distName,
+                    am: amName,
+                    partner: partnerName,
+                    contact: contactName,
+                    account: basicInfo.clientCompany || "",
+                    stage: line.stage,
+                    price: line.공급가,
+                    margin: line.마진,
+                    netdollar: netdollar
+                });
+            });
+            await Promise.all(syncPromises);
+        }
 
         return { success: true, intent: "edit" };
     } catch (error: any) {
@@ -641,13 +811,33 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         type: "error" | "success";
     } | null>(null);
 
-    // Toast 알림이 3초 뒤에 자동으로 사라지도록 처리
+    // Toast 알림이 3초 뒤에 자동으로 사라지도록 처리 (단, info 타입의 진행 중 상태일 때는 제외)
     useEffect(() => {
-        if (toast) {
+        if (toast && toast.type !== "info") {
             const timer = setTimeout(() => setToast(null), 3000);
             return () => clearTimeout(timer);
         }
     }, [toast]);
+
+    // 저장 진행 중일 때 로딩 토스트를 띄웁니다.
+    useEffect(() => {
+        if (fetcher.state === "submitting") {
+            const submittedData = fetcher.json as any;
+            const intentVal = submittedData?.intent;
+            
+            if (intentVal === "updateStage") {
+                setToast({
+                    message: "영업 단계 변경 및 구글 스프레드시트 동기화 중...",
+                    type: "info" as any,
+                });
+            } else {
+                setToast({
+                    message: "저장 및 구글 스프레드시트 동기화 중...",
+                    type: "info" as any,
+                });
+            }
+        }
+    }, [fetcher.state, fetcher.json]);
 
     // 서버 요청 완료 후 에러가 있으면 경고를, 성공했으면 편집 창을 닫도록 처리합니다.
     useEffect(() => {
@@ -665,6 +855,11 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 } else if (fetcher.data.intent === "delete") {
                     setToast({
                         message: "성공적으로 삭제되었습니다.",
+                        type: "success",
+                    });
+                } else if (fetcher.data.intent === "updateStage") {
+                    setToast({
+                        message: "영업 단계가 변경되었습니다.",
                         type: "success",
                     });
                 }
@@ -722,6 +917,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditStage(10);
         setEditOriginalUpdatedAt(null);
         setEditDefaultGroup("");
+    };
+
+    // 견적 리스트 단독 단계 변경 (드롭다운 빠른 수정)
+    const handleQuickStageChange = (quoteId: number, nextStage: number) => {
+        const isOrdered = nextStage === 99 ? 1 : 0;
+        const isLost = nextStage === 0 ? 1 : 0;
+
+        fetcher.submit(
+            {
+                intent: "updateStage",
+                quoteId,
+                stage: nextStage,
+                isOrdered,
+                isLost
+            },
+            { method: "post", encType: "application/json" }
+        );
     };
 
 
@@ -1622,9 +1834,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                             {quote.project_name ||
                                                                                 ""}
                                                                         </p>
-                                                                        <p>
-                                                                            단계: {quote.stage !== undefined && quote.stage !== null ? `${quote.stage}%` : "-"}
-                                                                        </p>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">단계:</span>
+                                                                            <select
+                                                                                value={quote.stage ?? 10}
+                                                                                disabled={fetcher.state === "submitting"}
+                                                                                onChange={(e) => handleQuickStageChange(quote.id, Number(e.target.value))}
+                                                                                className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-0.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                                                                            >
+                                                                                <option value="10">10%</option>
+                                                                                <option value="25">25%</option>
+                                                                                <option value="50">50%</option>
+                                                                                <option value="75">75%</option>
+                                                                                <option value="99">99%</option>
+                                                                                <option value="100">100%</option>
+                                                                                <option value="0">0%</option>
+                                                                            </select>
+                                                                        </div>
                                                                         <div className="flex items-center gap-4 mt-1">
                                                                             <div className="flex items-center gap-2">
                                                                                 <span>
@@ -1713,28 +1939,32 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={handleAddGroup}
-                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 h-8 px-3 border border-blue-200 dark:border-blue-800"
+                                                                                disabled={fetcher.state === "submitting"}
+                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 h-8 px-3 border border-blue-200 dark:border-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
                                                                             >
                                                                                 <Plus className="w-4 h-4 mr-1" /> 그룹 추가
                                                                             </button>
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={() => handleSaveEdit(quote.id)}
-                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-600 text-white hover:bg-green-700 h-8 px-3 shadow"
+                                                                                disabled={fetcher.state === "submitting"}
+                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 bg-green-600 text-white hover:bg-green-700 h-8 px-3 shadow disabled:opacity-50 disabled:cursor-not-allowed"
                                                                             >
                                                                                 <Save className="w-4 h-4 mr-1.5" /> 저장
                                                                             </button>
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={() => handleDeleteQuote(quote.id)}
-                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 bg-red-600 text-white hover:bg-red-700 h-8 px-3 shadow"
+                                                                                disabled={fetcher.state === "submitting"}
+                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 bg-red-600 text-white hover:bg-red-700 h-8 px-3 shadow disabled:opacity-50 disabled:cursor-not-allowed"
                                                                             >
                                                                                 <Trash2 className="w-4 h-4 mr-1.5" /> 삭제
                                                                             </button>
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={handleCancelEdit}
-                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-8 px-3"
+                                                                                disabled={fetcher.state === "submitting"}
+                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-500 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-8 px-3 disabled:opacity-50 disabled:cursor-not-allowed"
                                                                             >
                                                                                 <X className="w-4 h-4 mr-1.5" /> 취소
                                                                             </button>
@@ -2057,10 +2287,18 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             {/* 자체 구현한 트렌디한 Toast 컴포넌트 */}
             {toast && (
                 <div
-                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${toast.type === "error" ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"} transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
+                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${
+                        toast.type === "error" 
+                            ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" 
+                            : toast.type === "info"
+                            ? "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/80 dark:border-blue-800 dark:text-blue-200"
+                            : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"
+                    } transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
                 >
                     {toast.type === "error" ? (
                         <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400" />
+                    ) : toast.type === "info" ? (
+                        <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                     ) : (
                         <CheckCircle2 className="w-5 h-5 text-green-400 dark:text-green-600" />
                     )}
