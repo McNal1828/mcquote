@@ -46,7 +46,7 @@ export const links: Route.LinksFunction = () => [
 ];
 
 // 애플리케이션 전체의 기본 메타 태그를 설정합니다.
-export function meta({}: Route.MetaArgs) {
+export function meta({ }: Route.MetaArgs) {
     return [
         { title: "McQuote" },
         {
@@ -60,14 +60,14 @@ export function meta({}: Route.MetaArgs) {
 const navItems = [
     { path: "/", label: "견적 목록", icon: Home },
     { path: "/quoting", label: "견적 등록", icon: FilePlus },
-    { path: "/products", label: "제품 목록", icon: Package },
-    { path: "/ams", label: "AM 목록", icon: UserCircle },
-    { path: "/partners", label: "파트너사 목록", icon: Building2 },
-    { path: "/contacts", label: "파트너사 담당자 목록", icon: Users },
-    { path: "/dist", label: "총판 담당자 목록", icon: UserCheck },
+    { path: "/products", label: "제품", icon: Package },
+    { path: "/ams", label: "AM", icon: UserCircle },
+    { path: "/partners", label: "파트너사", icon: Building2 },
+    { path: "/contacts", label: "파트너사 담당자", icon: Users },
+    { path: "/dist", label: "총판 담당자", icon: UserCheck },
     { path: "/stats", label: "견적 통계", icon: BarChart3 },
-    { path: "/stats_revenue", label: "매출 통계", icon: TrendingUp },
-    { path: "/exchange_rate", label: "환율 관리", icon: Coins },
+    { path: "/stats_revenue", label: "매출", icon: TrendingUp },
+    { path: "/exchange_rate", label: "환율", icon: Coins },
 ];
 
 // 1. 보안이 강화된 HTTP-Only 쿠키 설정
@@ -220,10 +220,9 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
                                         to={item.path}
                                         prefetch="intent"
                                         className={({ isActive }) =>
-                                            `flex items-center transition-colors pb-4 ${
-                                                isActive
-                                                    ? "font-bold text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
-                                                    : "text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400"
+                                            `flex items-center transition-colors pb-4 ${isActive
+                                                ? "font-bold text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400"
+                                                : "text-gray-600 dark:text-gray-300 hover:text-blue-500 dark:hover:text-blue-400"
                                             }`
                                         }
                                     >

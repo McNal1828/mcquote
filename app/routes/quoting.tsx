@@ -8,6 +8,7 @@ import {
 import db from "../db.server";
 import crypto from "crypto";
 import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
+import { sendGasRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/quoting";
 import {
@@ -62,6 +63,16 @@ export async function action({ request }: Route.ActionArgs) {
     const { basicInfo, dealFlows, products, notes, calcMode, defaultGroup } = data;
     const now = Date.now();
     const quote_type = calcMode === "PPC" ? 0 : 1;
+
+    // 구글 시트 동기화를 위해 임시 수집할 대상을 담는 배열
+    const defaultLinesToSync: Array<{
+        id: number;
+        년차: number;
+        매출월: number;
+        stage: number;
+        공급가: number;
+        마진: number;
+    }> = [];
 
     try {
         const historyList = [
@@ -148,7 +159,7 @@ export async function action({ request }: Route.ActionArgs) {
                     const productRow = selectProduct.get(productCode) as { id: number } | undefined;
                     const productId = productRow ? productRow.id : null;
 
-                    insertLine.run(
+                    const lineInfo = insertLine.run(
                         groupId,
                         index + 1, // line_number
                         productId,
@@ -168,9 +179,59 @@ export async function action({ request }: Route.ActionArgs) {
                         Number(line.매출월) || 1, // 매출월
                         Number(line.stage) || 10 // stage (라인별 단계 기본값 10%)
                     );
+
+                    // 기본 그룹일 경우 구글 시트 동기화 대상에 추가
+                    if (isDefault) {
+                        defaultLinesToSync.push({
+                            id: Number(lineInfo.lastInsertRowid),
+                            년차: Number(line.년차) || 1,
+                            매출월: Number(line.매출월) || 1,
+                            stage: Number(line.stage) / 100 || 0.1,
+                            공급가: Number(line.공급가) || 0,
+                            마진: Number(line.마진) || 0,
+                            lpd: Number(line.lpd) || 0,
+                            수량: Number(line.수량) || 1,
+                            기간: Number(line.기간) || 1,
+                            DC달러: Number(line.DC달러) || 0
+                        });
+                    }
                 });
             }
         })();
+
+        // DB 저장이 완벽하게 완료된 후(커밋 후) 구글 스프레드시트 비동기 동기화 전송
+        if (defaultLinesToSync.length > 0) {
+            const partnerName = db.prepare("SELECT name FROM partners WHERE id = ?").get(Number(basicInfo.partnerId))?.name || "";
+            const contactName = db.prepare("SELECT name FROM partner_contacts WHERE id = ?").get(Number(basicInfo.partnerContactId))?.name || "";
+            const amName = db.prepare("SELECT name FROM ams WHERE id = ?").get(Number(basicInfo.amId))?.name || "";
+            const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
+
+            const syncPromises = defaultLinesToSync.map((line) => {
+                const netdollar = line.lpd * line.수량 * line.기간 * (1 - line.DC달러 / 100);
+                return sendGasRequest("add", {
+                    id: line.id,
+                    year: line.년차,
+                    month: line.매출월,
+                    vendor: basicInfo.vendor || "",
+                    dist: distName,
+                    am: amName,
+                    partner: partnerName,
+                    contact: contactName,
+                    account: basicInfo.clientCompany || "",
+                    stage: line.stage,
+                    price: line.공급가,
+                    margin: line.마진,
+                    netdollar: netdollar
+                });
+            });
+
+            const syncResults = await Promise.all(syncPromises);
+            const hasFailure = syncResults.some(r => !r.success);
+            if (hasFailure) {
+                console.warn("일부 라인이 구글 시트에 동기화되지 못했습니다.");
+                return { success: true, warning: "견적은 저장되었으나 구글 시트 동기화 중 일부 실패가 발생했습니다." };
+            }
+        }
 
         // 성공적으로 저장되면 성공 플래그를 반환합니다.
         return { success: true };
