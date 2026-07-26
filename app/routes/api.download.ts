@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import path from "path";
+import { logger } from "~/utils/logger";
 import type { Route } from "./+types/api.download";
 
 // 브라우저가 이 URL로 POST 요청을 보낼 때 실행됩니다.
@@ -15,6 +16,8 @@ export async function action({ request }: Route.ActionArgs) {
         clientCompany,
         projectName,
     } = await request.json();
+
+    logger.info(`[Excel Download API] Request received: type=${type}, Client=${clientCompany || "N/A"}, Project=${projectName || "N/A"}`);
 
     if (type === "cost") {
         const workbook = new ExcelJS.Workbook();

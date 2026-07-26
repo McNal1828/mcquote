@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import db from "../db.server";
+import { logger } from "~/utils/logger";
 import type { Route } from "./+types/api.home.download";
 
 function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, any[]>> {
@@ -29,15 +30,28 @@ function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, 
             l.id as line_id,
             l.group_id,
             l.line_number,
-            p.code as 제품코드,
-            l.description as 제품설명,
-            l.quantity as 수량,
-            l.period as 기간,
-            l.supply_price as 공급가
+            l.product_id,
+            l.description as product_description,
+            l.lpd,
+            l.lpw,
+            l.quantity,
+            l.period as duration,
+            l.dc_usd as dc_dollar,
+            l.exchange_rate,
+            l.dc_krw as dc_won,
+            l.supply_price,
+            l.margin,
+            l.margin_rate,
+            l.year,
+            l.krw_ppc as ppc_won,
+            l.month,
+            l.stage,
+            p.code as product_code,
+            p.vendor as product_vendor
         FROM quote_lines l
         LEFT JOIN products p ON l.product_id = p.id
         WHERE l.group_id IN (${groupPlaceholders})
-        ORDER BY l.line_number ASC
+        ORDER BY l.group_id ASC, l.line_number ASC
     `).all(...groupIds) as any[];
 
     // 3. 그룹 ID -> 라인 목록 매핑
@@ -46,7 +60,24 @@ function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, 
         if (!linesByGroup.has(line.group_id)) {
             linesByGroup.set(line.group_id, []);
         }
-        linesByGroup.get(line.group_id)!.push(line);
+        linesByGroup.get(line.group_id)!.push({
+            "제품코드": line.product_code || "",
+            "제품설명": line.product_description || "",
+            "lpd": line.lpd || 0,
+            "lpw": line.lpw || 0,
+            "수량": line.quantity || 1,
+            "기간": line.duration || 1,
+            "DC달러": line.dc_dollar || 0,
+            "환율": line.exchange_rate || 0,
+            "DC원화": line.dc_won || 0,
+            "공급가": line.supply_price || 0,
+            "마진": line.margin || 0,
+            "마진율": line.margin_rate || 0,
+            "년차": line.year || 1,
+            "원화PPC": line.ppc_won || 0,
+            "매출월": line.month || 1,
+            "stage": line.stage || 10
+        });
     });
 
     // 4. 견적 ID -> { "그룹명": [...라인] } 구조로 조립
@@ -62,6 +93,7 @@ function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, 
 
 export async function loader({ request }: Route.LoaderArgs) {
     const url = new URL(request.url);
+    logger.info(`[Excel Home Export] Download requested with params: ${url.search}`);
 
     // 1. home.tsx와 동일한 필터링 및 정렬 조건 구성
     const sortKey = url.searchParams.get("sortKey") || "updated_at";

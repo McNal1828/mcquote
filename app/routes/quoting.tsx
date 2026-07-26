@@ -10,6 +10,7 @@ import crypto from "crypto";
 import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
 import { sendGasRequest, sendGasBatchRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
+import { logger } from "~/utils/logger";
 import type { Route } from "./+types/quoting";
 import {
     Building2,
@@ -65,6 +66,8 @@ export async function action({ request }: Route.ActionArgs) {
     const quote_type = calcMode === "PPC" ? 0 : 1;
     const nextSyncToGas = syncToGas ? 1 : 0;
 
+    logger.info(`[Quoting Action] Received new quote creation request for Client: ${basicInfo?.clientCompany || "Unknown"}, Project: ${basicInfo?.projectName || "Unknown"}`);
+
     // 구글 시트 동기화를 위해 임시 수집할 대상을 담는 배열
     const defaultLinesToSync: Array<{
         id: number;
@@ -86,6 +89,7 @@ export async function action({ request }: Route.ActionArgs) {
             }
         ];
         const products_history = JSON.stringify(historyList);
+        let newQuoteId: number | bigint = 0;
 
         db.transaction(() => {
             const stmt = db.prepare(`
@@ -119,7 +123,7 @@ export async function action({ request }: Route.ActionArgs) {
                 nextSyncToGas,
             );
 
-            const quoteId = info.lastInsertRowid;
+            newQuoteId = info.lastInsertRowid;
 
             const insertVendor = db.prepare(`
                 INSERT INTO quote_vendors (quote_id, vendor)
@@ -130,7 +134,7 @@ export async function action({ request }: Route.ActionArgs) {
                 for (const v of selectedVendors) {
                     const cleanV = v.trim();
                     if (cleanV) {
-                        insertVendor.run(quoteId, cleanV);
+                        insertVendor.run(newQuoteId, cleanV);
                     }
                 }
             }
@@ -157,7 +161,7 @@ export async function action({ request }: Route.ActionArgs) {
 
                 const groupUuid = crypto.randomUUID();
                 const isDefault = groupName === defaultGroup ? 1 : 0;
-                const groupInfo = insertGroup.run(quoteId, groupName, groupUuid, isDefault);
+                const groupInfo = insertGroup.run(newQuoteId, groupName, groupUuid, isDefault);
                 const groupId = groupInfo.lastInsertRowid;
 
                 prods.forEach((line: any, index: number) => {
@@ -205,6 +209,8 @@ export async function action({ request }: Route.ActionArgs) {
             }
         })();
 
+        logger.info(`[Quoting Action] New quote ID ${newQuoteId} created successfully in SQLite.`);
+
         // DB 저장이 완벽하게 완료된 후(커밋 후) 구글 스프레드시트 비동기 동기화 전송 (사용자가 동기화를 선택했을 때만)
         if (nextSyncToGas === 1 && defaultLinesToSync.length > 0) {
             const partnerName = db.prepare("SELECT name FROM partners WHERE id = ?").get(Number(basicInfo.partnerId))?.name || "";
@@ -233,15 +239,16 @@ export async function action({ request }: Route.ActionArgs) {
 
             const batchResult = await sendGasBatchRequest({ addRows });
             if (!batchResult || !batchResult.success) {
-                console.warn("구글 시트에 일괄 동기화하지 못했습니다.");
+                logger.error(`[Quoting Action] Failed to sync new quote ID ${newQuoteId} to Google Sheets.`);
                 return { success: true, warning: "견적은 저장되었으나 구글 시트 동기화 중 실패가 발생했습니다." };
             }
+            logger.info(`[Quoting Action] New quote ID ${newQuoteId} synced to Google Sheets successfully.`);
         }
 
         // 성공적으로 저장되면 성공 플래그를 반환합니다.
         return { success: true };
-    } catch (error) {
-        console.error("견적 등록 실패:", error);
+    } catch (error: any) {
+        logger.error(`[Quoting Action] Failed to create new quote: ${error?.stack || error}`);
         return { error: "견적 등록 중 오류가 발생했습니다." };
     }
 }
