@@ -90,8 +90,9 @@ export default function ProductTable({
                       }}
                       onBlur={(e) => {
                         const num = parseInt(e.target.value, 10);
+                        const curMonth = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" })).getMonth() + 1;
                         if (isNaN(num)) {
-                          onChangeProduct?.(idx, "매출월", 1);
+                          onChangeProduct?.(idx, "매출월", curMonth);
                         } else {
                           const val = Math.max(1, Math.min(12, num));
                           onChangeProduct?.(idx, "매출월", val);
@@ -101,7 +102,7 @@ export default function ProductTable({
                     />
                   ) : (
                     <div className="text-center px-1.5">
-                      {calcProd.매출월 !== undefined ? calcProd.매출월 : (calcProd.month || 1)}
+                      {calcProd.매출월 !== undefined ? calcProd.매출월 : (calcProd.month || (new Date().getMonth() + 1))}
                     </div>
                   )}
                 </td>

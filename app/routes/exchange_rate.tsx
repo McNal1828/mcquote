@@ -4,6 +4,15 @@ import db from "../db.server";
 import type { Route } from "./+types/exchange_rate";
 import { TrendingUp, Coins, Save, CheckCircle2, AlertCircle } from "lucide-react";
 import { logger } from "~/utils/logger";
+import {
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
+    Tooltip,
+    ResponsiveContainer
+} from "recharts";
 
 export function shouldRevalidate() {
     return true;
@@ -21,16 +30,31 @@ export async function loader({ request }: Route.LoaderArgs) {
 
     const stmt = db.prepare("SELECT rate, timestamp FROM exchange_rate ORDER BY timestamp DESC LIMIT 1");
     const lastRate = stmt.get() as { rate: number; timestamp: number } | undefined;
+
+    // 최신 20개 환율 이력 조회 (시간 오름차순 정렬)
+    const historyStmt = db.prepare("SELECT rate, timestamp FROM exchange_rate ORDER BY timestamp DESC LIMIT 20");
+    const rawHistory = historyStmt.all() as Array<{ rate: number; timestamp: number }>;
+    const history = rawHistory.reverse().map(item => ({
+        rate: item.rate,
+        date: new Date(item.timestamp).toLocaleDateString("ko-KR", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit"
+        })
+    }));
+
     return {
         rate: lastRate ? lastRate.rate : 0,
         timestamp: lastRate ? lastRate.timestamp : null,
+        history,
     };
 }
 
 export async function action({ request }: Route.ActionArgs) {
     const formData = await request.formData();
     const rateStr = formData.get("rate");
-    
+
     logger.info(`[Exchange Rate Action] Requested update with rate: ${rateStr}`);
 
     if (!rateStr) {
@@ -82,76 +106,136 @@ export default function ExchangeRate({ loaderData }: Route.ComponentProps) {
 
     const formattedDate = loaderData.timestamp
         ? new Date(loaderData.timestamp).toLocaleString("ko-KR", {
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-          })
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+        })
         : "기록 없음";
 
     return (
-        <div className="p-8 container mx-auto max-w-2xl">
+        <div className="p-8 container mx-auto max-w-5xl">
             <h1 className="text-3xl font-bold mb-6 dark:text-white flex items-center">
                 <Coins className="w-8 h-8 mr-2.5 text-yellow-500" /> 환율 관리
             </h1>
 
-            {/* 현재 기준 환율 표시 카드 */}
-            <div className="mb-8 bg-gradient-to-br from-blue-500 to-indigo-600 text-white p-6 rounded-2xl shadow-lg border border-blue-400 dark:border-blue-500/30">
-                <div className="flex justify-between items-center mb-3">
-                    <span className="text-sm font-semibold text-blue-100 uppercase tracking-wider">
-                        현재 기본 적용 환율
-                    </span>
-                    <TrendingUp className="w-5 h-5 text-blue-100" />
-                </div>
-                <div className="text-4xl font-extrabold flex items-baseline gap-1.5">
-                    <span>{loaderData.rate.toLocaleString("ko-KR", { minimumFractionDigits: 2 })}</span>
-                    <span className="text-xl font-normal text-blue-200">KRW / USD</span>
-                </div>
-                <p className="text-xs text-blue-100/80 mt-4 flex items-center">
-                    마지막 수정 시각: {formattedDate}
-                </p>
-            </div>
-
-            {/* 새로운 환율 등록 폼 */}
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow border border-gray-200 dark:border-gray-700">
-                <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
-                    <Save className="w-5 h-5 mr-2 text-blue-500" /> 새로운 기본 환율 등록
-                </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-                    여기서 등록한 환율은 견적 생성(`quoting.tsx`) 및 견적 편집(`home.tsx`) 시 새로 추가되는 모든 제품 라인의 디폴트 환율값으로 바인딩됩니다.
-                </p>
-
-                <Form method="post" className="space-y-4">
-                    <div>
-                        <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
-                            환율 값 (원)
-                        </label>
-                        <div className="relative">
-                            <input
-                                type="number"
-                                name="rate"
-                                step="0.01"
-                                min="0.01"
-                                required
-                                placeholder="예: 1350.50"
-                                className="w-full pl-3 pr-16 py-3 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg transition-shadow"
-                            />
-                            <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                                <span className="text-gray-500 dark:text-gray-400 font-semibold text-sm">KRW / USD</span>
-                            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+                {/* 1. 왼쪽 영역: 현재 적용 환율 및 등록 폼 */}
+                <div className="lg:col-span-2 space-y-6">
+                    {/* 현재 기준 환율 표시 카드 */}
+                    <div className="bg-gradient-to-br from-blue-500 to-indigo-600 text-white p-6 rounded-2xl shadow-lg border border-blue-400 dark:border-blue-500/30">
+                        <div className="flex justify-between items-center mb-3">
+                            <span className="text-sm font-semibold text-blue-100 uppercase tracking-wider">
+                                현재 기본 적용 환율
+                            </span>
+                            <TrendingUp className="w-5 h-5 text-blue-100" />
                         </div>
+                        <div className="text-4xl font-extrabold flex items-baseline gap-1.5">
+                            <span>{loaderData.rate.toLocaleString("ko-KR", { minimumFractionDigits: 2 })}</span>
+                            <span className="text-xl font-normal text-blue-200">KRW / USD</span>
+                        </div>
+                        <p className="text-xs text-blue-100/80 mt-4 flex items-center">
+                            마지막 수정 시각: {formattedDate}
+                        </p>
                     </div>
 
-                    <button
-                        type="submit"
-                        disabled={isSubmitting}
-                        className="w-full inline-flex items-center justify-center rounded-xl text-base font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-600 text-white hover:bg-blue-700 h-12 shadow-md disabled:opacity-75 disabled:cursor-not-allowed"
-                    >
-                        {isSubmitting ? "등록 중..." : "환율 저장하기"}
-                    </button>
-                </Form>
+                    {/* 새로운 환율 등록 폼 */}
+                    <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow border border-gray-200 dark:border-gray-700">
+                        <h2 className="text-xl font-bold mb-4 dark:text-white flex items-center">
+                            <Save className="w-5 h-5 mr-2 text-blue-500" /> 새로운 기본 환율 등록
+                        </h2>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                            등록한 환율은 추가되는 모든 제품 라인의 디폴트 환율값으로 바인딩됩니다.
+                        </p>
+
+                        <Form method="post" className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">
+                                    환율 값 (원)
+                                </label>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        name="rate"
+                                        step="0.01"
+                                        min="0.01"
+                                        required
+                                        placeholder="예: 1350.50"
+                                        className="w-full pl-3 pr-16 py-3 border border-gray-300 dark:border-gray-600 rounded-xl bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg transition-shadow"
+                                    />
+                                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                                        <span className="text-gray-500 dark:text-gray-400 font-semibold text-sm">KRW / USD</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={isSubmitting}
+                                className="w-full inline-flex items-center justify-center rounded-xl text-base font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-600 text-white hover:bg-blue-700 h-12 shadow-md disabled:opacity-75 disabled:cursor-not-allowed"
+                            >
+                                {isSubmitting ? "등록 중..." : "환율 저장하기"}
+                            </button>
+                        </Form>
+                    </div>
+                </div>
+
+                {/* 2. 오른쪽 영역: 최근 20개 환율 변동 추이 꺾은선 그래프 */}
+                <div className="lg:col-span-3 bg-white dark:bg-gray-800 p-6 rounded-2xl shadow border border-gray-200 dark:border-gray-700 flex flex-col justify-between min-h-[420px]">
+                    <div>
+                        <h2 className="text-xl font-bold mb-2 dark:text-white flex items-center">
+                            <TrendingUp className="w-5 h-5 mr-2 text-green-500" /> 최근 환율 변동 추이 (최대 20개)
+                        </h2>
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                            등록 및 갱신된 환율 기록을 실시간 타임라인 기준 그래프로 시각화합니다.
+                        </p>
+                    </div>
+
+                    <div className="w-full h-80 min-h-[320px] mt-4">
+                        {loaderData.history && loaderData.history.length > 0 ? (
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={loaderData.history} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" className="dark:stroke-gray-700" />
+                                    <XAxis
+                                        dataKey="date"
+                                        tick={{ fontSize: 10 }}
+                                        stroke="#9ca3af"
+                                        dy={10}
+                                    />
+                                    <YAxis
+                                        domain={["auto", "auto"]}
+                                        tick={{ fontSize: 11 }}
+                                        stroke="#9ca3af"
+                                        dx={-5}
+                                    />
+                                    <Tooltip
+                                        contentStyle={{
+                                            backgroundColor: "rgba(255, 255, 255, 0.95)",
+                                            borderColor: "#e5e7eb",
+                                            borderRadius: "12px",
+                                            boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1)"
+                                        }}
+                                        labelStyle={{ color: "#374151", fontWeight: "bold" }}
+                                    />
+                                    <Line
+                                        type="monotone"
+                                        dataKey="rate"
+                                        stroke="#3b82f6"
+                                        strokeWidth={3}
+                                        dot={{ r: 4, stroke: "#3b82f6", strokeWidth: 2, fill: "#fff" }}
+                                        activeDot={{ r: 6, stroke: "#2563eb", strokeWidth: 2, fill: "#fff" }}
+                                    />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div className="h-full flex items-center justify-center text-gray-400">
+                                등록된 환율 변동 이력이 없습니다.
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
 
             {/* Toast 피드백 알림 */}

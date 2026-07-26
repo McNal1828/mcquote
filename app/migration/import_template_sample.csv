@@ -1,0 +1,4 @@
+year,month,client_company,partner_name,am_name,dist_contact_name,vendor,stage,dc_usd,supply_price,margin,status
+2026,7,(주)고객사A,(주)파트너A,이AM,김총판,Broadcom,100,1000,1500000,300000,
+2026,7,(주)고객사B,(주)파트너B,김AM,이총판,Omnissa,100,2500,3800000,750000,
+2026,6,(주)고객사C,(주)파트너A,이AM,김총판,Broadcom,100,5000,7200000,1200000,

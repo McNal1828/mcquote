@@ -82,6 +82,10 @@ export function getFinalProducts(
 
 // 빈 제품 행 객체를 생성하는 공통 팩토리 함수
 export function createEmptyProductRow(defaultRate?: number) {
+    const nowSeoul = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+    const currentYear = nowSeoul.getFullYear();
+    const currentMonth = nowSeoul.getMonth() + 1;
+
     return {
         제품코드: "",
         제품설명: "",
@@ -94,10 +98,10 @@ export function createEmptyProductRow(defaultRate?: number) {
         DC원화: 0,
         공급가: 0,
         마진: 0,
-        년차: new Date().getFullYear(),
+        년차: currentYear,
         원화PPC: 0,
         마진율: "0.0",
-        매출월: 1,
+        매출월: currentMonth,
         stage: 10,
     };
 }

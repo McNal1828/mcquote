@@ -5,12 +5,12 @@
 
 @theme {
     --font-sans:
-        "Inter", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
-        "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+        "Pretendard", "Inter", -apple-system, BlinkMacSystemFont, "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", ui-sans-serif, system-ui, sans-serif;
 }
 
 html,
 body {
+    font-family: var(--font-sans);
     @apply bg-white dark:bg-gray-950;
 }
 

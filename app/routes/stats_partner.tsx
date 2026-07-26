@@ -34,15 +34,15 @@ export async function loader({ request }: Route.LoaderArgs) {
     const startDateParam = url.searchParams.get("startDate");
     const endDateParam = url.searchParams.get("endDate");
 
-    // 파라미터가 누락되면 기본값(이전 달 1일 ~ 이번 달 말일, 최소 2달 확보)으로 주소창 강제 동기화 리다이렉트
+    // 파라미터가 누락되면 기본값(두 달 전 1일 ~ 이번 달 말일, 한국시간 기준)으로 주소창 강제 동기화 리다이렉트
     if (!startDateParam || !endDateParam) {
         const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
         const y = now.getFullYear();
         const m = String(now.getMonth() + 1).padStart(2, "0");
         const lastDay = new Date(y, now.getMonth() + 1, 0);
 
-        // 이전 달의 1일 계산
-        const prevMonthDate = new Date(y, now.getMonth() - 1, 1);
+        // 두 달 전의 1일 계산 (한국시간 기준 2달 전 ~ 이번 달 말일)
+        const prevMonthDate = new Date(y, now.getMonth() - 2, 1);
         const py = prevMonthDate.getFullYear();
         const pm = String(prevMonthDate.getMonth() + 1).padStart(2, "0");
 

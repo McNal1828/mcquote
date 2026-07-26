@@ -139,9 +139,95 @@ function doPost(e) {
             }
         }
 
+        // 4. 일괄 배치 처리 (action: "batch")
+        if (action === 'batch') {
+            const lock = LockService.getScriptLock();
+            try {
+                // 동시 실행 데이터 꼬임 방지를 위해 30초 대기 락 획득
+                lock.waitLock(30000);
+
+                const values = sheet.getDataRange().getValues();
+
+                // ① 일괄 삭제 (deleteIds)
+                if (requestData.deleteIds && requestData.deleteIds.length > 0) {
+                    const deleteSet = new Set(requestData.deleteIds.map(String));
+                    // 행이 당겨지는 것을 고려해 뒤에서부터 루프 돌며 삭제
+                    for (let i = values.length - 1; i >= 1; i--) {
+                        if (deleteSet.has(String(values[i][3]))) { // D열의 ID 비교
+                            sheet.deleteRow(i + 1);
+                        }
+                    }
+                }
+
+                // ② 일괄 영업 단계 수정 (updateRows)
+                if (requestData.updateRows && requestData.updateRows.length > 0) {
+                    const updateMap = {};
+                    requestData.updateRows.forEach(row => {
+                        updateMap[String(row.id)] = row.stage;
+                    });
+
+                    for (let i = 1; i < values.length; i++) {
+                        const targetIdStr = String(values[i][3]);
+                        if (updateMap[targetIdStr] !== undefined) {
+                            sheet.getRange(i + 1, 14).setValue(updateMap[targetIdStr]); // N열 Stage 수정
+                        }
+                    }
+                }
+
+                // ③ 일괄 추가 (addRows)
+                if (requestData.addRows && requestData.addRows.length > 0) {
+                    requestData.addRows.forEach((rowPayload) => {
+                        const nextRow = sheet.getLastRow() + 1;
+                        const newRow = [
+                            rowPayload.year,
+                            rowPayload.month,
+                            `="Q" & CHOOSE(B${nextRow}, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4)`, // C열 분기 수식
+                            rowPayload.id,
+                            '',
+                            rowPayload.vendor,
+                            'SDI사업본부',
+                            rowPayload.dist,
+                            rowPayload.am,
+                            rowPayload.partner,
+                            rowPayload.contact,
+                            rowPayload.account,
+                            '',
+                            rowPayload.stage, // N열 Stage
+                            rowPayload.netdollar,
+                            rowPayload.price,
+                            rowPayload.margin,
+                            `=Q${nextRow}/P${nextRow}`, // R열 마진율 수식
+                            '',
+                            ''
+                        ];
+
+                        sheet.appendRow(newRow);
+
+                        // 스타일 서식 상속 복사
+                        if (nextRow > 2) {
+                            const numCols = newRow.length;
+                            const sourceRange = sheet.getRange(nextRow - 1, 1, 1, numCols);
+                            const targetRange = sheet.getRange(nextRow, 1, 1, numCols);
+                            sourceRange.copyTo(targetRange, { formatOnly: true });
+                        }
+                    });
+                }
+
+                // 구글 스프레드시트 반영 즉시 강제 기입
+                SpreadsheetApp.flush();
+
+                return responseJSON({
+                    status: 'success',
+                    message: '배치 작업이 성공적으로 수행되었습니다.'
+                });
+            } finally {
+                lock.releaseLock(); // 반드시 락 반환
+            }
+        }
+
         return responseJSON({
             status: 'fail',
-            message: '유효하지 않은 action입니다. ("add", "delete" 또는 "update" 입력 필요)'
+            message: '유효하지 않은 action입니다. ("add", "delete", "update" 또는 "batch" 입력 필요)'
         });
 
     } catch (error) {

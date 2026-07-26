@@ -8,7 +8,7 @@ import {
 import db from "../db.server";
 import crypto from "crypto";
 import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
-import { sendGasRequest } from "~/utils/gasService";
+import { sendGasRequest, sendGasBatchRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/quoting";
 import {
@@ -60,9 +60,10 @@ export async function loader({ request }: Route.LoaderArgs) {
 export async function action({ request }: Route.ActionArgs) {
     // 클라이언트에서 JSON 형태로 전송한 데이터를 파싱합니다.
     const data = await request.json();
-    const { basicInfo, dealFlows, products, notes, calcMode, defaultGroup } = data;
+    const { basicInfo, dealFlows, products, notes, calcMode, defaultGroup, syncToGas } = data;
     const now = Date.now();
     const quote_type = calcMode === "PPC" ? 0 : 1;
+    const nextSyncToGas = syncToGas ? 1 : 0;
 
     // 구글 시트 동기화를 위해 임시 수집할 대상을 담는 배열
     const defaultLinesToSync: Array<{
@@ -72,6 +73,10 @@ export async function action({ request }: Route.ActionArgs) {
         stage: number;
         공급가: number;
         마진: number;
+        lpd: number;
+        수량: number;
+        기간: number;
+        DC달러: number;
     }> = [];
 
     try {
@@ -89,8 +94,8 @@ export async function action({ request }: Route.ActionArgs) {
                     project_name, quote_type, created_at, updated_at, 
                     contract_type, deal_flow, stage, note,
                     partner_id, partner_contact_id, am_id, dist_contact_id,
-                    products_history
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    products_history, sync_to_gas
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             const info = stmt.run(
@@ -111,6 +116,7 @@ export async function action({ request }: Route.ActionArgs) {
                 basicInfo.amId ? Number(basicInfo.amId) : null,
                 basicInfo.distContactId ? Number(basicInfo.distContactId) : null,
                 products_history,
+                nextSyncToGas,
             );
 
             const quoteId = info.lastInsertRowid;
@@ -199,16 +205,16 @@ export async function action({ request }: Route.ActionArgs) {
             }
         })();
 
-        // DB 저장이 완벽하게 완료된 후(커밋 후) 구글 스프레드시트 비동기 동기화 전송
-        if (defaultLinesToSync.length > 0) {
+        // DB 저장이 완벽하게 완료된 후(커밋 후) 구글 스프레드시트 비동기 동기화 전송 (사용자가 동기화를 선택했을 때만)
+        if (nextSyncToGas === 1 && defaultLinesToSync.length > 0) {
             const partnerName = db.prepare("SELECT name FROM partners WHERE id = ?").get(Number(basicInfo.partnerId))?.name || "";
             const contactName = db.prepare("SELECT name FROM partner_contacts WHERE id = ?").get(Number(basicInfo.partnerContactId))?.name || "";
             const amName = db.prepare("SELECT name FROM ams WHERE id = ?").get(Number(basicInfo.amId))?.name || "";
             const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
 
-            const syncPromises = defaultLinesToSync.map((line) => {
+            const addRows = defaultLinesToSync.map((line) => {
                 const netdollar = line.lpd * line.수량 * line.기간 * (1 - line.DC달러 / 100);
-                return sendGasRequest("add", {
+                return {
                     id: line.id,
                     year: line.년차,
                     month: line.매출월,
@@ -222,14 +228,13 @@ export async function action({ request }: Route.ActionArgs) {
                     price: line.공급가,
                     margin: line.마진,
                     netdollar: netdollar
-                });
+                };
             });
 
-            const syncResults = await Promise.all(syncPromises);
-            const hasFailure = syncResults.some(r => !r.success);
-            if (hasFailure) {
-                console.warn("일부 라인이 구글 시트에 동기화되지 못했습니다.");
-                return { success: true, warning: "견적은 저장되었으나 구글 시트 동기화 중 일부 실패가 발생했습니다." };
+            const batchResult = await sendGasBatchRequest({ addRows });
+            if (!batchResult || !batchResult.success) {
+                console.warn("구글 시트에 일괄 동기화하지 못했습니다.");
+                return { success: true, warning: "견적은 저장되었으나 구글 시트 동기화 중 실패가 발생했습니다." };
             }
         }
 
@@ -407,6 +412,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
 
     const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN">("DC");
     const [defaultGroup, setDefaultGroup] = useState<string>("원가표1");
+    const [syncToGas, setSyncToGas] = useState<boolean>(true);
 
     const [toast, setToast] = useState<{
         message: string;
@@ -423,28 +429,37 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         }
     }, [toast]);
 
-    useEffect(() => {
-        if (isSubmitting) {
-            setToast({ message: "견적 등록을 진행 중입니다...", type: "success" });
-        }
-    }, [isSubmitting]);
+    // 제출 진행 중 모달의 시각적 0.5초 완료 지연(Visual Buffer Delay) 상태
+    const [isSubmittingModal, setIsSubmittingModal] = useState<boolean>(false);
+    const [isModalDone, setIsModalDone] = useState<boolean>(false);
 
     useEffect(() => {
-        if (actionData) {
-            if (actionData.error) {
-                setToast({ message: actionData.error, type: "error" });
-            } else if (actionData.success) {
-                setToast({
-                    message: "견적이 성공적으로 등록되었습니다. 잠시 후 홈 화면으로 이동합니다.",
-                    type: "success",
-                });
+        if (isSubmitting) {
+            setIsSubmittingModal(true);
+            setIsModalDone(false);
+        } else if (actionData && isSubmittingModal) {
+            if (actionData.success) {
+                setIsModalDone(true);
                 const timer = setTimeout(() => {
-                    navigate("/");
-                }, 1000);
+                    setIsSubmittingModal(false);
+                    setIsModalDone(false);
+                    setToast({
+                        message: "견적이 성공적으로 등록되었습니다. 잠시 후 홈 화면으로 이동합니다.",
+                        type: "success",
+                    });
+                    // 모달이 닫히고 우측 하단 토스트 메시지가 뜬 후 1초 동안 보여주고 홈 화면으로 이동
+                    setTimeout(() => {
+                        navigate("/");
+                    }, 1000);
+                }, 500);
                 return () => clearTimeout(timer);
+            } else if (actionData.error) {
+                setIsSubmittingModal(false);
+                setIsModalDone(false);
+                setToast({ message: actionData.error, type: "error" });
             }
         }
-    }, [actionData, navigate]);
+    }, [isSubmitting, actionData, isSubmittingModal, navigate]);
 
     const updateBasicInfoValue = (name: string, value: string) => {
         handleBasicInfoChange({
@@ -764,6 +779,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 notes: finalNotes,
                 calcMode,
                 defaultGroup,
+                syncToGas,
             },
             { method: "post", encType: "application/json" },
         );
@@ -1199,6 +1215,17 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                             />
                                             <span className="font-semibold text-gray-700 dark:text-gray-300">기본 원가표</span>
                                         </label>
+                                        {defaultGroup === groupName && (
+                                            <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800/40 px-2.5 py-1.5 rounded hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={syncToGas}
+                                                    onChange={(e) => setSyncToGas(e.target.checked)}
+                                                    className="w-3.5 h-3.5 text-green-600 focus:ring-green-500 border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                                                />
+                                                <span className="font-semibold text-green-700 dark:text-green-400">구글 스프레드시트 동기화</span>
+                                            </label>
+                                        )}
                                     </div>
                                     <div className="flex items-center gap-6">
                                         <div className="text-sm text-gray-500 dark:text-gray-400 flex gap-4">
@@ -1329,6 +1356,75 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     </button>
                 </div>
             </form>
+
+            {/* 전체 화면 시퀀스 진행도 로딩 오버레이 모달 (0.5초 완료 지연 포함) */}
+            {isSubmittingModal && (
+                <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl flex flex-col items-center text-center space-y-6">
+                        {/* 로딩 아이콘 / 완료 아이콘 */}
+                        <div className="relative flex items-center justify-center">
+                            {isModalDone ? (
+                                <div className="w-16 h-16 bg-green-100 dark:bg-green-950/80 rounded-full flex items-center justify-center animate-in zoom-in-50 duration-200">
+                                    <CheckCircle2 className="w-10 h-10 text-green-600 dark:text-green-400" />
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-600 rounded-full animate-spin"></div>
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="w-8 h-8 bg-blue-600/10 rounded-full animate-ping"></div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* 시퀀스 제목 & 안내 메시지 */}
+                        <div className="space-y-2">
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                                {isModalDone ? "신규 견적 등록 완료!" : "신규 견적 등록 진행 중"}
+                            </h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                                {isModalDone
+                                    ? "성공적으로 견적이 등록되었습니다. 잠시 후 홈으로 이동합니다."
+                                    : "데이터베이스 등록 및 구글 시트 연동을 수행하고 있습니다."}
+                            </p>
+                        </div>
+
+                        {/* 시퀀스 별 2단계 인디케이터 */}
+                        <div className="w-full bg-gray-50 dark:bg-gray-800/60 rounded-xl p-4 space-y-3 border border-gray-100 dark:border-gray-700/50">
+                            <div className="flex items-center justify-between text-xs font-semibold">
+                                <span className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                                    <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                                    1단계: DB 견적 등록
+                                </span>
+                                <span className="text-green-600 dark:text-green-400 font-bold">✓ 완료</span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs font-semibold">
+                                <span className={`flex items-center gap-2 ${syncToGas ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"}`}>
+                                    <span className={`w-2 h-2 rounded-full ${syncToGas ? "bg-blue-500" : "bg-gray-400"}`}></span>
+                                    2단계: 구글 스프레드시트 동기화
+                                </span>
+                                {syncToGas ? (
+                                    isModalDone ? (
+                                        <span className="text-green-600 dark:text-green-400 font-bold">✓ 완료</span>
+                                    ) : (
+                                        <span className="text-blue-500 font-bold animate-pulse">진행 중...</span>
+                                    )
+                                ) : (
+                                    <span className="text-gray-400 font-medium">(미동기화 스킵)</span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 실시간 프로그레스 바 */}
+                        <div className="w-full space-y-1.5">
+                            <div className="h-2 w-full bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                                <div className={`h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-300 ${isModalDone ? "w-full" : "w-3/4 animate-pulse"}`}></div>
+                            </div>
+                            <p className="text-xs text-gray-400 text-right">{isModalDone ? "완료 처리 중..." : "잠시만 기다려주세요..."}</p>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {toast && (
                 <div

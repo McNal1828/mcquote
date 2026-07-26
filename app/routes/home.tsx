@@ -2,7 +2,7 @@ import { useState, Fragment, useEffect, useRef } from "react";
 import { useFetcher, useSearchParams, Link } from "react-router";
 import crypto from "crypto";
 import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
-import { sendGasRequest } from "~/utils/gasService";
+import { sendGasRequest, sendGasBatchRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/home";
 import db from "../db.server";
@@ -27,6 +27,7 @@ import {
     ChevronDown,
     ChevronUp,
     ChevronsUpDown,
+    FileSpreadsheet,
 } from "lucide-react";
 
 export const handle = {
@@ -65,6 +66,7 @@ export async function action({ request }: Route.ActionArgs) {
         originalUpdatedAt,
         defaultGroup,
         stage,
+        syncToGas,
     } = data;
 
     logger.info(`[Home Action] Received request: intent=${intent}, quoteId=${quoteId}`);
@@ -72,7 +74,10 @@ export async function action({ request }: Route.ActionArgs) {
     if (intent === "delete") {
         try {
             logger.info(`[Home Action] Deleting Quote ID: ${quoteId}...`);
-            // [구글 시트 연동] 삭제 전에 기존 디폴트 그룹의 라인 ID를 먼저 조회해둡니다.
+            // [구글 시트 연동] 삭제 전에 기존 디폴트 그룹의 라인 ID와 동기화 설정을 먼저 조회해둡니다.
+            const currentQuote = db.prepare("SELECT sync_to_gas FROM quotes WHERE id = ?").get(Number(quoteId)) as { sync_to_gas: number } | undefined;
+            const priorSyncToGas = currentQuote ? currentQuote.sync_to_gas : 1;
+
             const oldLines = db.prepare(`
                 SELECT ql.id 
                 FROM quote_lines ql
@@ -83,12 +88,10 @@ export async function action({ request }: Route.ActionArgs) {
             const stmt = db.prepare("DELETE FROM quotes WHERE id = ?");
             stmt.run(quoteId);
 
-            // DB 커밋 성공 후 구글 시트에서 기존 라인 병렬 삭제 요청
-            if (oldLines.length > 0) {
-                const deletePromises = oldLines.map((line) => {
-                    return sendGasRequest("delete", { id: line.id });
-                });
-                await Promise.all(deletePromises);
+            // DB 커밋 성공 후 사용자가 연동해두었던 경우에만 구글 시트에서 기존 라인 일괄 삭제 요청
+            if (priorSyncToGas === 1 && oldLines.length > 0) {
+                const deleteIds = oldLines.map(line => line.id);
+                await sendGasBatchRequest({ deleteIds });
             }
 
             logger.info(`[Home Action] Quote ID ${quoteId} deleted successfully and synced to Google Sheets.`);
@@ -108,7 +111,10 @@ export async function action({ request }: Route.ActionArgs) {
 
             logger.info(`[Home Action] Updating stage for Quote ID: ${targetQuoteId} to ${targetStage}% (Ordered: ${targetIsOrdered}, Lost: ${targetIsLost})...`);
 
-            // 1. 구글 시트 연동을 위해 해당 견적 디폴트 그룹의 라인 ID 리스트를 미리 조회합니다.
+            // 1. 구글 시트 연동 상태 및 기존 디폴트 그룹의 라인 ID 리스트를 미리 조회합니다.
+            const currentQuote = db.prepare("SELECT sync_to_gas FROM quotes WHERE id = ?").get(targetQuoteId) as { sync_to_gas: number } | undefined;
+            const priorSyncToGas = currentQuote ? currentQuote.sync_to_gas : 1;
+
             const defaultLines = db.prepare(`
                 SELECT ql.id 
                 FROM quote_lines ql
@@ -131,15 +137,13 @@ export async function action({ request }: Route.ActionArgs) {
                 `).run(targetStage, targetQuoteId);
             })();
 
-            // 3. 구글 시트 단독 업데이트 (update) 요청 병렬 송신
-            if (defaultLines.length > 0) {
-                const updatePromises = defaultLines.map((line) => {
-                    return sendGasRequest("update", {
-                        id: line.id,
-                        stage: targetStage / 100 // 백분율 환산 (50% -> 0.5)
-                    });
-                });
-                await Promise.all(updatePromises);
+            // 3. 구글 시트 동기화가 설정되어 있을 때만 일괄 송신
+            if (priorSyncToGas === 1 && defaultLines.length > 0) {
+                const updateRows = defaultLines.map(line => ({
+                    id: line.id,
+                    stage: targetStage / 100 // 백분율 환산 (50% -> 0.5)
+                }));
+                await sendGasBatchRequest({ updateRows });
             }
 
             logger.info(`[Home Action] Quote ID ${targetQuoteId} stage updated to ${targetStage}% and synced to Google Sheets.`);
@@ -226,7 +230,11 @@ export async function action({ request }: Route.ActionArgs) {
         }
         const products_history = JSON.stringify(historyList);
 
-        // [구글 시트 연동] DB 수정 전 기존 디폴트 그룹의 라인 ID를 선조회 백업합니다.
+        // [구글 시트 연동] DB 수정 전 기존 디폴트 그룹의 라인 ID와 연동 상태를 선조회 백업합니다.
+        const currentQuoteRow = db.prepare("SELECT sync_to_gas FROM quotes WHERE id = ?").get(Number(quoteId)) as { sync_to_gas: number } | undefined;
+        const priorSyncToGas = currentQuoteRow ? currentQuoteRow.sync_to_gas : 1;
+        const nextSyncToGas = syncToGas !== undefined ? (syncToGas ? 1 : 0) : 1;
+
         const oldLines = db.prepare(`
             SELECT ql.id 
             FROM quote_lines ql
@@ -251,7 +259,7 @@ export async function action({ request }: Route.ActionArgs) {
         db.transaction(() => {
             const stmt = db.prepare(`
                 UPDATE quotes 
-                SET quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?, products_history = ?, stage = ?
+                SET quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?, products_history = ?, stage = ?, sync_to_gas = ?
                 WHERE id = ? AND updated_at = ?
             `);
             const info = stmt.run(
@@ -263,6 +271,7 @@ export async function action({ request }: Route.ActionArgs) {
                 now,
                 products_history,
                 stage !== undefined && stage !== null ? Number(stage) : 10,
+                nextSyncToGas,
                 quoteId,
                 originalUpdatedAt,
             );
@@ -346,17 +355,12 @@ export async function action({ request }: Route.ActionArgs) {
             }
         })();
 
-        // DB 트랜잭션 커밋 완료 후 구글 스프레드시트 삭제 & 추가 진행
-        // ① 구글 시트 기존 라인 일괄 삭제 (id만 가볍게 전달)
-        if (oldLines.length > 0) {
-            const deletePromises = oldLines.map((line) => {
-                return sendGasRequest("delete", { id: line.id });
-            });
-            await Promise.all(deletePromises);
-        }
+        // DB 트랜잭션 커밋 완료 후 구글 스프레드시트 일괄 삭제 & 추가 진행 (상태 전환 매트릭스 적용)
+        const deleteIds = oldLines.map(line => line.id);
+        let addRows: any[] = [];
 
-        // ② 구글 시트 신규 라인 일괄 추가
-        if (defaultLinesToSync.length > 0) {
+        // 동기화가 현재 켜져있거나 켜지는 경우에만 addRows 데이터를 수집합니다.
+        if (nextSyncToGas === 1 && defaultLinesToSync.length > 0) {
             // 수정 데이터에는 파트너/AM 정보가 동봉되지 않으므로 DB에서 기존 실시간 메타 정보를 조회합니다.
             const quoteMeta = db.prepare(`
                 SELECT client_company, partner_id, partner_contact_id, am_id, dist_contact_id
@@ -389,9 +393,9 @@ export async function action({ request }: Route.ActionArgs) {
             const amName = db.prepare("SELECT name FROM ams WHERE id = ?").get(Number(basicInfo.amId))?.name || "";
             const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
 
-            const syncPromises = defaultLinesToSync.map((line) => {
+            addRows = defaultLinesToSync.map((line) => {
                 const netdollar = line.lpd * line.수량 * line.기간 * (1 - line.DC달러 / 100);
-                return sendGasRequest("add", {
+                return {
                     id: line.id,
                     year: line.년차,
                     month: line.매출월,
@@ -405,10 +409,28 @@ export async function action({ request }: Route.ActionArgs) {
                     price: line.공급가,
                     margin: line.마진,
                     netdollar: netdollar
-                });
+                };
             });
-            await Promise.all(syncPromises);
         }
+
+        // 상태 전환 매트릭스에 따른 분기 전송
+        if (priorSyncToGas === 1 && nextSyncToGas === 0) {
+            // 1 ➡️ 0: 구글 시트에서 기존 데이터 삭제만 수행
+            if (deleteIds.length > 0) {
+                await sendGasBatchRequest({ deleteIds });
+            }
+        } else if (priorSyncToGas === 0 && nextSyncToGas === 1) {
+            // 0 ➡️ 1: 구글 시트에 신규 데이터 일괄 추가만 수행
+            if (addRows.length > 0) {
+                await sendGasBatchRequest({ addRows });
+            }
+        } else if (priorSyncToGas === 1 && nextSyncToGas === 1) {
+            // 1 ➡️ 1: 기존 삭제 후 새 데이터 일괄 기입
+            if (deleteIds.length > 0 || addRows.length > 0) {
+                await sendGasBatchRequest({ deleteIds, addRows });
+            }
+        }
+        // 0 ➡️ 0: 구글 시트 전송 생략 (Bypass 유지)
 
         logger.info(`[Home Action] Quote ID ${quoteId} edited and synced to Google Sheets successfully.`);
         return { success: true, intent: "edit" };
@@ -624,6 +646,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.quote_type,
             q.is_ordered,
             q.is_lost,
+            q.sync_to_gas,
             (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendor,
             (SELECT IFNULL(SUM(l.supply_price), 0)
              FROM quote_groups g
@@ -689,6 +712,7 @@ export async function loader({ request }: Route.LoaderArgs) {
             quote_type: row.quote_type, // PPC(0) or DC/MARGIN(1)
             is_ordered: row.is_ordered,
             is_lost: row.is_lost,
+            sync_to_gas: row.sync_to_gas,
             vendor: row.vendor,
             created_at: row.created_at,
             createdAtDate: new Date(row.created_at).toLocaleDateString("ko-KR"),
@@ -766,6 +790,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         number | null
     >(null);
     const [editDefaultGroup, setEditDefaultGroup] = useState<string>("");
+    const [editSyncToGas, setEditSyncToGas] = useState<boolean>(true);
 
     // 전체 단계와 제품라인 일괄 수정 동기화를 위한 변수 및 함수
     const prevStageValRef = useRef<number>(10);
@@ -830,25 +855,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         }
     }, [toast]);
 
-    // 저장 진행 중일 때 로딩 토스트를 띄웁니다.
+    // 제출 진행 중 모달의 시각적 0.5초 완료 지연(Visual Buffer Delay) 상태
+    const [isSubmittingModal, setIsSubmittingModal] = useState<boolean>(false);
+    const [isModalDone, setIsModalDone] = useState<boolean>(false);
+
     useEffect(() => {
         if (fetcher.state === "submitting") {
-            const submittedData = fetcher.json as any;
-            const intentVal = submittedData?.intent;
-            
-            if (intentVal === "updateStage") {
-                setToast({
-                    message: "영업 단계 변경 및 구글 스프레드시트 동기화 중...",
-                    type: "info" as any,
-                });
-            } else {
-                setToast({
-                    message: "저장 및 구글 스프레드시트 동기화 중...",
-                    type: "info" as any,
-                });
-            }
+            setIsSubmittingModal(true);
+            setIsModalDone(false);
+        } else if (fetcher.state === "idle" && fetcher.data && isSubmittingModal) {
+            setIsModalDone(true);
+            const timer = setTimeout(() => {
+                setIsSubmittingModal(false);
+                setIsModalDone(false);
+            }, 500); // 0.5초 시각적 딜레이를 두어 완료 상태를 눈으로 편안히 확인하도록 함
+            return () => clearTimeout(timer);
         }
-    }, [fetcher.state, fetcher.json]);
+    }, [fetcher.state, fetcher.data]);
 
     // 서버 요청 완료 후 에러가 있으면 경고를, 성공했으면 편집 창을 닫도록 처리합니다.
     useEffect(() => {
@@ -915,6 +938,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             if (keys.length > 0) initialDefault = keys[0];
         }
         setEditDefaultGroup(initialDefault);
+        setEditSyncToGas(quote.sync_to_gas === 1);
     };
 
     // 견적 수정 취소
@@ -928,11 +952,12 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditStage(10);
         setEditOriginalUpdatedAt(null);
         setEditDefaultGroup("");
+        setEditSyncToGas(true);
     };
 
     // 견적 리스트 단독 단계 변경 (드롭다운 빠른 수정)
     const handleQuickStageChange = (quoteId: number, nextStage: number) => {
-        const isOrdered = nextStage === 99 ? 1 : 0;
+        const isOrdered = (nextStage === 99 || nextStage === 100) ? 1 : 0;
         const isLost = nextStage === 0 ? 1 : 0;
 
         fetcher.submit(
@@ -954,7 +979,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         // [오더 / 실주 상태에 따른 단계 자동 일관성 보정]
         let targetStage = editStage;
         if (editIsOrdered === 1) {
-            targetStage = 99;
+            targetStage = editStage === 100 ? 100 : 99;
         } else if (editIsLost === 1) {
             targetStage = 0;
         }
@@ -1046,6 +1071,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 stage: targetStage,
                 originalUpdatedAt: editOriginalUpdatedAt,
                 defaultGroup: editDefaultGroup,
+                syncToGas: editSyncToGas,
             },
             { method: "post", encType: "application/json" },
         );
@@ -1640,7 +1666,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                             {quote.dist_contact_name}
                                         </td>
                                         <td className="p-4 truncate" title={quote.project_name}>
-                                            {quote.project_name}
+                                            <div className="flex items-center gap-2">
+                                                {quote.sync_to_gas !== 0 ? (
+                                                    <FileSpreadsheet 
+                                                        className="w-4 h-4 flex-shrink-0" 
+                                                        color="#10b981" 
+                                                        fill="#10b981" 
+                                                        fillOpacity={0.15}
+                                                        title="구글 스프레드시트 연동 중" 
+                                                    />
+                                                ) : (
+                                                    <FileSpreadsheet 
+                                                        className="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0" 
+                                                        title="구글 스프레드시트 연동 해제됨" 
+                                                    />
+                                                )}
+                                                <span className="truncate">{quote.project_name}</span>
+                                            </div>
                                         </td>
                                         <td className="p-4 truncate">
                                             {quote.stage !== undefined && quote.stage !== null ? `${quote.stage}%` : "-"}
@@ -1782,6 +1824,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     const success = updateAllProductsStage(newVal);
                                                                                     if (!success) {
                                                                                         setEditStage(prevVal);
+                                                                                    } else {
+                                                                                        if (newVal === 99 || newVal === 100) {
+                                                                                            setEditIsOrdered(1);
+                                                                                            setEditIsLost(0);
+                                                                                        } else if (newVal === 0) {
+                                                                                            setEditIsLost(1);
+                                                                                            setEditIsOrdered(0);
+                                                                                        }
                                                                                     }
                                                                                 }}
                                                                                 className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
@@ -1808,8 +1858,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         setEditIsOrdered(checked ? 1 : 0);
                                                                                         if (checked) {
                                                                                             setEditIsLost(0);
-                                                                                            setEditStage(99);
-                                                                                            updateAllProductsStage(99);
+                                                                                            const nextStageVal = editStage === 100 ? 100 : 99;
+                                                                                            setEditStage(nextStageVal);
+                                                                                            updateAllProductsStage(nextStageVal);
                                                                                         }
                                                                                     }}
                                                                                     className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
@@ -2037,6 +2088,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         />
                                                                                         <span className="font-semibold text-gray-700 dark:text-gray-300">기본 원가표</span>
                                                                                     </label>
+                                                                                    {editDefaultGroup === groupName && (
+                                                                                        <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800/40 px-2 py-1 rounded hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors">
+                                                                                            <input
+                                                                                                type="checkbox"
+                                                                                                checked={editSyncToGas}
+                                                                                                onChange={(e) => setEditSyncToGas(e.target.checked)}
+                                                                                                className="w-3.5 h-3.5 text-green-600 focus:ring-green-500 border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800"
+                                                                                            />
+                                                                                            <span className="font-semibold text-green-700 dark:text-green-400">구글 스프레드시트 동기화</span>
+                                                                                        </label>
+                                                                                    )}
                                                                                 </>
                                                                             ) : (
                                                                                 <div className="flex items-center gap-3">
@@ -2295,21 +2357,92 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 </div>
             </div>
 
-            {/* 자체 구현한 트렌디한 Toast 컴포넌트 */}
-            {toast && (
+            {/* 전체 화면 시퀀스 진행도 로딩 오버레이 모달 (0.5초 완료 지연 포함) */}
+            {isSubmittingModal && (
+                <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-md flex items-center justify-center animate-in fade-in duration-200">
+                    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-8 max-w-md w-full mx-4 shadow-2xl flex flex-col items-center text-center space-y-6">
+                        {/* 로딩 아이콘 / 완료 아이콘 */}
+                        <div className="relative flex items-center justify-center">
+                            {isModalDone ? (
+                                <div className="w-16 h-16 bg-green-100 dark:bg-green-950/80 rounded-full flex items-center justify-center animate-in zoom-in-50 duration-200">
+                                    <CheckCircle2 className="w-10 h-10 text-green-600 dark:text-green-400" />
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="w-16 h-16 border-4 border-blue-500/20 border-t-blue-600 rounded-full animate-spin"></div>
+                                    <div className="absolute inset-0 flex items-center justify-center">
+                                        <div className="w-8 h-8 bg-blue-600/10 rounded-full animate-ping"></div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* 시퀀스 제목 & 안내 메시지 */}
+                        <div className="space-y-2">
+                            <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                                {isModalDone
+                                    ? "작업 완료!"
+                                    : fetcher.json?.intent === "updateStage"
+                                    ? "영업 단계 변경 진행 중"
+                                    : fetcher.json?.intent === "delete"
+                                    ? "견적 삭제 진행 중"
+                                    : "견적 저장 및 동기화 중"}
+                            </h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                                {isModalDone
+                                    ? "성공적으로 처리를 완료하였습니다."
+                                    : "데이터베이스 갱신 및 구글 시트 연동을 수행하고 있습니다."}
+                            </p>
+                        </div>
+
+                        {/* 시퀀스 별 2단계 인디케이터 */}
+                        <div className="w-full bg-gray-50 dark:bg-gray-800/60 rounded-xl p-4 space-y-3 border border-gray-100 dark:border-gray-700/50">
+                            <div className="flex items-center justify-between text-xs font-semibold">
+                                <span className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
+                                    <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+                                    1단계: DB 데이터 저장
+                                </span>
+                                <span className="text-green-600 dark:text-green-400 font-bold">✓ 완료</span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs font-semibold">
+                                <span className={`flex items-center gap-2 ${editSyncToGas ? "text-blue-600 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"}`}>
+                                    <span className={`w-2 h-2 rounded-full ${editSyncToGas ? "bg-blue-500" : "bg-gray-400"}`}></span>
+                                    2단계: 구글 스프레드시트 동기화
+                                </span>
+                                {editSyncToGas ? (
+                                    isModalDone ? (
+                                        <span className="text-green-600 dark:text-green-400 font-bold">✓ 완료</span>
+                                    ) : (
+                                        <span className="text-blue-500 font-bold animate-pulse">진행 중...</span>
+                                    )
+                                ) : (
+                                    <span className="text-gray-400 font-medium">(미동기화 스킵)</span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* 실시간 프로그레스 바 */}
+                        <div className="w-full space-y-1.5">
+                            <div className="h-2 w-full bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden">
+                                <div className={`h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-300 ${isModalDone ? "w-full" : "w-3/4 animate-pulse"}`}></div>
+                            </div>
+                            <p className="text-xs text-gray-400 text-right">{isModalDone ? "완료 처리 중..." : "잠시만 기다려주세요..."}</p>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 성공 / 에러 전용 트렌디한 Toast 컴포넌트 (우측 하단) */}
+            {toast && toast.type !== "info" && (
                 <div
                     className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${
                         toast.type === "error" 
                             ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" 
-                            : toast.type === "info"
-                            ? "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/80 dark:border-blue-800 dark:text-blue-200"
                             : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"
                     } transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
                 >
                     {toast.type === "error" ? (
                         <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400" />
-                    ) : toast.type === "info" ? (
-                        <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                     ) : (
                         <CheckCircle2 className="w-5 h-5 text-green-400 dark:text-green-600" />
                     )}

@@ -13,6 +13,7 @@ import {
     Edit3,
     CheckCircle,
     Clock,
+    FileText,
 } from "lucide-react";
 import {
     BarChart,
@@ -40,10 +41,10 @@ export async function loader({ request }: Route.LoaderArgs) {
     const curYear = now.getFullYear();
     const curMonth = now.getMonth() + 1;
 
-    // 파라미터가 하나라도 누락되면 기본값(현재년월)으로 즉시 리다이렉트 처리하여 동기화
+    // 파라미터가 하나라도 누락되면 기본값(현재년도 1월 ~ 현재년도 현재달)으로 즉시 리다이렉트 처리하여 동기화
     if (!startYearParam || !startMonthParam || !endYearParam || !endMonthParam) {
         url.searchParams.set("startYear", String(curYear));
-        url.searchParams.set("startMonth", String(curMonth));
+        url.searchParams.set("startMonth", "1");
         url.searchParams.set("endYear", String(curYear));
         url.searchParams.set("endMonth", String(curMonth));
         return redirect(url.pathname + url.search);
@@ -197,24 +198,27 @@ export async function loader({ request }: Route.LoaderArgs) {
         .all(...timeParams) as any[];
 
     // 원본 데이터 기준으로 초기 요약 데이터(분모용) 계산 (단계별 건수 집계)
-    let totalBillIssued = 0;      // 100% (계산서 발행 완료)
-    let totalOrdered = 0;         // 99% (오더 완료)
-    let totalOrderExpected = 0;   // 50%, 75% (오더 예정)
-    let totalPending = 0;         // 10%, 25% (진행 중)
+    let totalBillIssued = 0;      // 100% (계산서발행완료)
+    let totalOrderedPending = 0;  // 99% (오더완료/계산서미발행)
+    let totalOrderExpected = 0;   // 50%, 75% (오더예정)
+    let totalInPipeline = 0;      // 25% (진행중)
+    let totalBudgetQuote = 0;     // 10% (예산견적)
 
     rawLines.forEach((l) => {
         if (l.stage === 100) totalBillIssued++;
-        else if (l.stage === 99) totalOrdered++;
+        else if (l.stage === 99) totalOrderedPending++;
         else if (l.stage === 50 || l.stage === 75) totalOrderExpected++;
-        else if (l.stage === 10 || l.stage === 25) totalPending++;
+        else if (l.stage === 25) totalInPipeline++;
+        else if (l.stage === 10) totalBudgetQuote++;
     });
 
     const summary = {
         totalLines: rawLines.length,
         totalBillIssued,
-        totalOrdered,
+        totalOrderedPending,
         totalOrderExpected,
-        totalPending,
+        totalInPipeline,
+        totalBudgetQuote,
     };
 
     return {
@@ -361,44 +365,82 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
 
     // 필터링 적용된 실시간 요약 통계 계산 (단계별 건수)
     const currentSummary = useMemo(() => {
-        let totalBillIssued = 0;      // 100% (계산서 발행 완료)
-        let totalOrdered = 0;         // 99% (오더 완료)
-        let totalOrderExpected = 0;   // 50%, 75% (오더 예정)
-        let totalPending = 0;         // 10%, 25% (진행 중)
+        let totalBillIssued = 0;      // 100% (계산서발행완료)
+        let totalOrderedPending = 0;  // 99% (오더완료/계산서미발행)
+        let totalOrderExpected = 0;   // 50%, 75% (오더예정)
+        let totalInPipeline = 0;      // 25% (진행중)
+        let totalBudgetQuote = 0;     // 10% (예산견적)
 
         filteredLines.forEach((l) => {
             if (l.stage === 100) totalBillIssued++;
-            else if (l.stage === 99) totalOrdered++;
+            else if (l.stage === 99) totalOrderedPending++;
             else if (l.stage === 50 || l.stage === 75) totalOrderExpected++;
-            else if (l.stage === 10 || l.stage === 25) totalPending++;
+            else if (l.stage === 25) totalInPipeline++;
+            else if (l.stage === 10) totalBudgetQuote++;
         });
 
         return {
             totalLines: filteredLines.length,
             totalBillIssued,
-            totalOrdered,
+            totalOrderedPending,
             totalOrderExpected,
-            totalPending,
+            totalInPipeline,
+            totalBudgetQuote,
         };
     }, [filteredLines]);
 
-    // 필터링 적용된 실시간 월별 매출 및 마진 추이 차트 데이터 계산
+    // 필터링 적용된 실시간 월별 매출 및 마진 추이 차트 데이터 계산 (Stacked 구조)
     const currentMonthlyTrend = useMemo(() => {
         const monthlyDataMap: Record<string, any> = {};
 
         filteredLines.forEach((l) => {
             const mKey = `${l.year}-${String(l.month).padStart(2, "0")}`;
             if (!monthlyDataMap[mKey]) {
-                monthlyDataMap[mKey] = { month: mKey, supplyPriceSum: 0, marginSum: 0 };
+                monthlyDataMap[mKey] = { 
+                    month: mKey, 
+                    supplyPriceSum: 0, 
+                    marginSum: 0,
+                    netSupplyPriceSum: 0 // 순수 매출/원가 (매출액 - 마진액)
+                };
             }
-            monthlyDataMap[mKey].supplyPriceSum += l.supply_price || 0;
-            monthlyDataMap[mKey].marginSum += l.margin || 0;
+            const supply = l.supply_price || 0;
+            const margin = l.margin || 0;
+            monthlyDataMap[mKey].supplyPriceSum += supply;
+            monthlyDataMap[mKey].marginSum += margin;
+            monthlyDataMap[mKey].netSupplyPriceSum += (supply - margin);
         });
 
         return Object.values(monthlyDataMap).sort((a: any, b: any) =>
             a.month.localeCompare(b.month),
         );
     }, [filteredLines]);
+
+    // 한국 기준 현재 년/월
+    const nowSeoul = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+    const curYear = nowSeoul.getFullYear();
+    const curMonth = nowSeoul.getMonth() + 1;
+
+    // 당월 상세 매출 라인 내역 (단계 내림차순 -> 파트너사 -> 고객사 오름차순 정렬)
+    const currentMonthLines = useMemo(() => {
+        return filteredLines
+            .filter((l: any) => Number(l.year) === curYear && Number(l.month) === curMonth)
+            .sort((a: any, b: any) => {
+                // 1차: 단계 내림차순 (100% -> 99% -> 75% -> 50% -> 25% -> 10%)
+                const stageDiff = (Number(b.stage) || 0) - (Number(a.stage) || 0);
+                if (stageDiff !== 0) return stageDiff;
+
+                // 2차: 파트너사 오름차순
+                const partnerA = a.partner_name || "";
+                const partnerB = b.partner_name || "";
+                const partnerDiff = partnerA.localeCompare(partnerB, "ko-KR");
+                if (partnerDiff !== 0) return partnerDiff;
+
+                // 3차: 고객사 오름차순
+                const clientA = a.client_company || "";
+                const clientB = b.client_company || "";
+                return clientA.localeCompare(clientB, "ko-KR");
+            });
+    }, [filteredLines, curYear, curMonth]);
 
     // 비율 헬퍼
     const getRatioText = (current: number, total: number) => {
@@ -426,10 +468,9 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
     // 차트용 커스텀 툴팁
     const CustomTooltip = ({ active, payload, label }: any) => {
         if (active && payload && payload.length) {
-            const supplyItem = payload.find((p: any) => p.dataKey === "supplyPriceSum");
-            const marginItem = payload.find((p: any) => p.dataKey === "marginSum");
-            const supplyVal = supplyItem?.value || 0;
-            const marginVal = marginItem?.value || 0;
+            const rowData = payload[0]?.payload || {};
+            const marginVal = rowData.marginSum || 0;
+            const supplyVal = rowData.supplyPriceSum || 0;
             const marginRate = supplyVal > 0 ? ((marginVal / supplyVal) * 100).toFixed(1) : "0.0";
 
             return (
@@ -438,14 +479,14 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                         {label}월
                     </p>
                     <div className="flex flex-col gap-1.5 text-xs">
-                        <p className="text-emerald-600 dark:text-emerald-400 font-medium">
-                            마진액: {formatCurrency(marginVal)} ({formatCurrencyBrief(marginVal)})
-                        </p>
                         <p className="text-blue-600 dark:text-blue-400 font-medium">
-                            매출액: {formatCurrency(supplyVal)} ({formatCurrencyBrief(supplyVal)})
+                            총 매출액: {formatCurrency(supplyVal)} ({formatCurrencyBrief(supplyVal)})
+                        </p>
+                        <p className="text-emerald-600 dark:text-emerald-400 font-medium">
+                            총 마진액: {formatCurrency(marginVal)} ({formatCurrencyBrief(marginVal)})
                         </p>
                         <p className="text-purple-600 dark:text-purple-400 font-semibold border-t dark:border-gray-700 pt-1.5 mt-1">
-                            마진율 (매출 대비): {marginRate}%
+                            마진율: {marginRate}%
                         </p>
                     </div>
                 </div>
@@ -520,57 +561,70 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                 </Form>
             </div>
 
-            {/* 구역 1: 4대 핵심 요약 지표 (영업 단계별 라인 건수) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-                {/* 1. 계산서 발행 완료 */}
-                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 shadow-sm">
+            {/* 구역 1: 5대 핵심 요약 지표 (영업 단계별 라인 건수) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+                {/* 1. 계산서발행완료 */}
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                            계산서 발행 완료 (100%)
+                        <h3 className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 truncate" title="계산서발행완료 (100%)">
+                            계산서발행완료 (100%)
                         </h3>
-                        <CheckCircle className="w-4 h-4 text-blue-500" />
+                        <CheckCircle className="w-4 h-4 text-blue-500 flex-shrink-0" />
                     </div>
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
                         {currentSummary.totalBillIssued}건
                     </div>
                 </div>
 
-                {/* 2. 오더 완료 */}
-                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 shadow-sm">
+                {/* 2. 오더완료/계산서미발행 */}
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                            오더 완료 (99%)
+                        <h3 className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 truncate" title="오더완료/계산서미발행 (99%)">
+                            오더완료/미발행 (99%)
                         </h3>
-                        <PlusCircle className="w-4 h-4 text-emerald-500" />
+                        <PlusCircle className="w-4 h-4 text-emerald-500 flex-shrink-0" />
                     </div>
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
-                        {currentSummary.totalOrdered}건
+                        {currentSummary.totalOrderedPending}건
                     </div>
                 </div>
 
-                {/* 3. 오더 예정 */}
-                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 shadow-sm">
+                {/* 3. 오더예정 */}
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                            오더 예정 (50%, 75%)
+                        <h3 className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 truncate" title="오더예정 (50%, 75%)">
+                            오더예정 (50%, 75%)
                         </h3>
-                        <Clock className="w-4 h-4 text-amber-500" />
+                        <Clock className="w-4 h-4 text-amber-500 flex-shrink-0" />
                     </div>
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
                         {currentSummary.totalOrderExpected}건
                     </div>
                 </div>
 
-                {/* 4. 진행 중 */}
-                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-5 shadow-sm">
+                {/* 4. 진행중 */}
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm">
                     <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                            진행 중 (10%, 25%)
+                        <h3 className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 truncate" title="진행중 (25%)">
+                            진행중 (25%)
                         </h3>
-                        <Edit3 className="w-4 h-4 text-gray-400" />
+                        <Edit3 className="w-4 h-4 text-indigo-500 flex-shrink-0" />
                     </div>
                     <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
-                        {currentSummary.totalPending}건
+                        {currentSummary.totalInPipeline}건
+                    </div>
+                </div>
+
+                {/* 5. 예산견적 */}
+                <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 truncate" title="예산견적 (10%)">
+                            예산견적 (10%)
+                        </h3>
+                        <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                    </div>
+                    <div className="text-xl sm:text-2xl font-bold text-gray-900 dark:text-white">
+                        {currentSummary.totalBudgetQuote}건
                     </div>
                 </div>
             </div>
@@ -618,16 +672,17 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                                 <Bar
                                     dataKey="marginSum"
                                     name="마진액"
+                                    stackId="a"
                                     fill="#10b981"
-                                    radius={[4, 4, 0, 0]}
-                                    maxBarSize={30}
+                                    maxBarSize={35}
                                 />
                                 <Bar
-                                    dataKey="supplyPriceSum"
+                                    dataKey="netSupplyPriceSum"
                                     name="매출액"
+                                    stackId="a"
                                     fill="#3b82f6"
                                     radius={[4, 4, 0, 0]}
-                                    maxBarSize={30}
+                                    maxBarSize={35}
                                 />
                             </BarChart>
                         </ResponsiveContainer>
@@ -891,13 +946,16 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                 </div>
             </div>
 
-            {/* 구역 4: 상세 견적 라인 목록 테이블 */}
+            {/* 구역 4: 당월 상세 견적 라인 목록 테이블 */}
             <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 p-6">
-                <div className="border-b dark:border-gray-700 pb-3 mb-4">
+                <div className="border-b dark:border-gray-700 pb-3 mb-4 flex justify-between items-center">
                     <h2 className="text-xl font-bold dark:text-white flex items-center">
                         <Building2 className="w-5 h-5 mr-2 text-blue-500" />{" "}
-                        상세 매출 라인 내역
+                        당월 상세 매출 라인 내역
                     </h2>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">
+                        기준: 한국시간 {curYear}년 {curMonth}월 (단계 내림차순 ➔ 파트너사 ➔ 고객사 오름차순)
+                    </span>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm text-left border-collapse">
@@ -916,7 +974,7 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                            {filteredLines.map((line: any) => {
+                            {currentMonthLines.map((line: any) => {
                                 const marginRate = line.supply_price > 0 ? ((line.margin / line.supply_price) * 100).toFixed(1) : "0.0";
                                 return (
                                     <tr key={line.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 text-gray-700 dark:text-gray-300">
@@ -949,10 +1007,10 @@ export default function StatsRevenue({ loaderData }: Route.ComponentProps) {
                                     </tr>
                                 );
                             })}
-                            {filteredLines.length === 0 && (
+                            {currentMonthLines.length === 0 && (
                                 <tr>
                                     <td colSpan={10} className="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
-                                        조회된 매출 상세 라인이 없습니다.
+                                        당월({curMonth}월)에 해당하는 상세 매출 라인이 없습니다.
                                     </td>
                                 </tr>
                             )}
