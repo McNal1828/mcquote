@@ -2022,7 +2022,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                 <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
                     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
                         {/* Header */}
-                        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-850">
+                        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/90">
                             <div>
                                 <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
                                     <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-600"></span>
@@ -2268,7 +2268,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                         </div>
 
                         {/* Footer */}
-                        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-850 flex justify-end gap-3">
+                        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/90 flex justify-end gap-3">
                             <button
                                 type="button"
                                 onClick={() => setOrderConfirmModalData(null)}
