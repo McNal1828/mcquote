@@ -63,10 +63,11 @@ export async function loader({ request }: Route.LoaderArgs) {
 export async function action({ request }: Route.ActionArgs) {
     // 클라이언트에서 JSON 형태로 전송한 데이터를 파싱합니다.
     const data = await request.json();
-    const { basicInfo, dealFlows, products, notes, calcMode, defaultGroup, syncToGas } = data;
+    const { basicInfo, dealFlows, products, notes, gasNote, calcMode, defaultGroup, syncToGas } = data;
     const now = Date.now();
     const quote_type = calcMode === "PPC" ? 0 : (calcMode === "DC" ? 1 : (calcMode === "MARGIN" ? 2 : 3));
     const nextSyncToGas = syncToGas ? 1 : 0;
+    const gasNoteVal = gasNote !== undefined ? String(gasNote).trim() : "";
 
     logger.info(`[Quoting Action] Received new quote creation request for Client: ${basicInfo?.clientCompany || "Unknown"}, Project: ${basicInfo?.projectName || "Unknown"}`);
 
@@ -82,6 +83,7 @@ export async function action({ request }: Route.ActionArgs) {
         수량: number;
         기간: number;
         DC달러: number;
+        netdollar: number;
     }> = [];
 
     try {
@@ -103,8 +105,6 @@ export async function action({ request }: Route.ActionArgs) {
                     products_history, sync_to_gas, gas_note
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
-
-            const gasNoteVal = notes && notes.length > 0 ? (notes[0] || "").trim() : "";
 
             const info = stmt.run(
                 basicInfo.clientCompany,
@@ -233,7 +233,7 @@ export async function action({ request }: Route.ActionArgs) {
             const amName = db.prepare("SELECT name FROM ams WHERE id = ?").get(Number(basicInfo.amId))?.name || "";
             const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
 
-            const representNote = Array.isArray(notes) && notes.length > 0 ? (notes[0] || "") : "";
+            const representNote = gasNoteVal;
 
             const addRows = defaultLinesToSync.map((line) => {
                 return {
@@ -442,8 +442,9 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         "원가표1": [createEmptyProductRow(defaultExchangeRate)],
     });
 
-    // 3. 비고 상태 관리
+    // 3. 비고 및 대표비고 상태 관리
     const [notes, setNotes] = useState<string[]>([""]);
+    const [gasNote, setGasNote] = useState<string>("");
 
     const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN" | "MANUAL">("DC");
     const [defaultGroup, setDefaultGroup] = useState<string>("원가표1");
@@ -812,6 +813,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 dealFlows: finalDealFlows,
                 products: finalProducts,
                 notes: finalNotes,
+                gasNote: gasNote.trim(),
                 calcMode,
                 defaultGroup,
                 syncToGas,
@@ -1208,18 +1210,10 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                     </span>
                                     <input
                                         type="text"
-                                        value={notes[0] || ""}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
-                                            setNotes((prev) => {
-                                                const next = [...prev];
-                                                if (next.length === 0) return [val];
-                                                next[0] = val;
-                                                return next;
-                                            });
-                                        }}
+                                        value={gasNote}
+                                        onChange={(e) => setGasNote(e.target.value)}
                                         className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 md:w-80"
-                                        placeholder="대표 비고를 입력하세요"
+                                        placeholder="대표 비고를 입력하세요 (Google Sheet 전송용)"
                                     />
                                 </div>
                             </div>
