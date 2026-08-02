@@ -45,6 +45,7 @@ export async function action({ request }: Route.ActionArgs) {
         products,
         calcMode,
         notes,
+        gasNote,
         projectName,
         isOrdered,
         isLost,
@@ -289,7 +290,7 @@ export async function action({ request }: Route.ActionArgs) {
         const products_history = JSON.stringify(historyList);
 
         // [구글 시트 연동] DB 수정 전 기존 디폴트 그룹의 라인 ID와 연동 상태를 선조회 백업합니다.
-        const currentQuoteRow = db.prepare("SELECT sync_to_gas FROM quotes WHERE id = ?").get(Number(quoteId)) as { sync_to_gas: number } | undefined;
+        const currentQuoteRow = db.prepare("SELECT sync_to_gas, gas_note FROM quotes WHERE id = ?").get(Number(quoteId)) as { sync_to_gas: number; gas_note?: string } | undefined;
         const priorSyncToGas = currentQuoteRow ? currentQuoteRow.sync_to_gas : 1;
         const nextSyncToGas = syncToGas !== undefined ? (syncToGas ? 1 : 0) : 1;
 
@@ -314,7 +315,7 @@ export async function action({ request }: Route.ActionArgs) {
             DC달러: number;
         }> = [];
 
-        const gasNoteVal = notes && notes.length > 0 ? (notes[0] || "").trim() : "";
+        const gasNoteVal = gasNote !== undefined ? String(gasNote).trim() : (currentQuoteRow?.gas_note || "");
 
         db.transaction(() => {
             const stmt = db.prepare(`
@@ -880,6 +881,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     const [editProducts, setEditProducts] = useState<Record<string, any[]>>({});
     const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN" | "MANUAL">("DC");
     const [editNotes, setEditNotes] = useState<string[]>([]);
+    const [editGasNote, setEditGasNote] = useState<string>("");
     const [editProjectName, setEditProjectName] = useState<string>("");
     const [editIsOrdered, setEditIsOrdered] = useState<number>(0);
     const [editIsLost, setEditIsLost] = useState<number>(0);
@@ -1017,6 +1019,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditProducts(JSON.parse(JSON.stringify(initialProducts))); // 깊은 복사
         setCalcMode(quote.quote_type === 0 ? "PPC" : "DC");
         setEditNotes(JSON.parse(JSON.stringify(quote.noteList)));
+        setEditGasNote(quote.gas_note || "");
         setEditProjectName(quote.project_name || "");
         setEditIsOrdered(quote.is_ordered || 0);
         setEditIsLost(quote.is_lost || 0);
@@ -1044,6 +1047,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditingQuoteId(null);
         setEditProducts({});
         setEditNotes([]);
+        setEditGasNote("");
         setEditProjectName("");
         setEditIsOrdered(0);
         setEditIsLost(0);
@@ -1245,6 +1249,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             products: finalProducts,
             calcMode,
             notes: finalEditNotes,
+            gasNote: editGasNote,
             projectName: editProjectName,
             isOrdered: targetIsOrdered,
             isLost: targetIsLost,
@@ -1938,16 +1943,8 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         {editingQuoteId === quote.id ? (
                                                                             <input
                                                                                 type="text"
-                                                                                value={editNotes[0] || ""}
-                                                                                onChange={(e) => {
-                                                                                    const val = e.target.value;
-                                                                                    setEditNotes((prev) => {
-                                                                                        const next = [...prev];
-                                                                                        if (next.length === 0) return [val];
-                                                                                        next[0] = val;
-                                                                                        return next;
-                                                                                    });
-                                                                                }}
+                                                                                value={editGasNote}
+                                                                                onChange={(e) => setEditGasNote(e.target.value)}
                                                                                 className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-[300px] md:w-[380px]"
                                                                                 placeholder="대표 비고를 입력하세요"
                                                                             />
