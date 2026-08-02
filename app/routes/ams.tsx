@@ -21,7 +21,7 @@ import {
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
-        "SELECT id, name, position, job_type, email, phone, assigned_clients, vendor, available FROM ams",
+        "SELECT id, name, position, job_type, email, phone, assigned_clients, vendor, available, del_timestamp FROM ams",
     );
     const rawAms = stmt.all();
 
@@ -64,14 +64,16 @@ export async function action({ request }: Route.ActionArgs) {
 
     logger.info(`[AMs Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
 
+    const now = Date.now();
+
     if (intent === "add") {
         if (!name) {
             return { error: "AM 이름이 필요합니다.", intent: "add" };
         }
         try {
             const stmt = db.prepare(`
-                INSERT INTO ams (name, position, job_type, email, phone, assigned_clients, vendor, available) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                INSERT INTO ams (name, position, job_type, email, phone, assigned_clients, vendor, available, create_timestamp) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
             `);
             stmt.run(
                 name,
@@ -81,6 +83,7 @@ export async function action({ request }: Route.ActionArgs) {
                 phone,
                 assigned_clients_json,
                 vendor,
+                now
             );
             logger.info(`[AMs Action] AM ${name} added successfully.`);
             return { success: true, intent: "add" };
@@ -93,8 +96,8 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "삭제할 ID가 필요합니다.", intent: "delete" };
         }
         try {
-            const stmt = db.prepare("UPDATE ams SET available = 0 WHERE id = ?");
-            stmt.run(Number(id));
+            const stmt = db.prepare("UPDATE ams SET available = 0, del_timestamp = ? WHERE id = ?");
+            stmt.run(now, Number(id));
             logger.info(`[AMs Action] AM ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
         } catch (error: any) {
@@ -106,9 +109,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "복구할 ID가 필요합니다.", intent: "restore" };
         }
         try {
-            const stmt = db.prepare("UPDATE ams SET available = 1 WHERE id = ?");
+            const stmt = db.prepare("UPDATE ams SET available = 1, del_timestamp = NULL WHERE id = ?");
             stmt.run(Number(id));
-            logger.info(`[AMs Action] AM ID ${id} restored (available = 1) successfully.`);
+            logger.info(`[AMs Action] AM ID ${id} restored (available = 1, del_timestamp = null) successfully.`);
             return { success: true, intent: "restore" };
         } catch (error: any) {
             logger.error(`[AMs Action] Failed to restore AM ID ${id}: ${error.stack || error.message}`);
@@ -144,6 +147,24 @@ export async function action({ request }: Route.ActionArgs) {
     logger.warn(`[AMs Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
+
+// 한국시간(KST) 포맷터 함수
+const formatKST = (timestamp?: number | string | null) => {
+    if (!timestamp) return "";
+    try {
+        const d = new Date(Number(timestamp));
+        if (isNaN(d.getTime())) return "";
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const date = String(d.getDate()).padStart(2, "0");
+        const hours = String(d.getHours()).padStart(2, "0");
+        const minutes = String(d.getMinutes()).padStart(2, "0");
+        const seconds = String(d.getSeconds()).padStart(2, "0");
+        return `${year}-${month}-${date} ${hours}:${minutes}:${seconds}`;
+    } catch (e) {
+        return "";
+    }
+};
 
 export default function Ams({ loaderData }: Route.ComponentProps) {
     const [showAvailableOnly, setShowAvailableOnly] = useState(true);
@@ -466,6 +487,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                             {renderTh("이메일", "email")}
                             {renderTh("전화번호", "phone")}
                             {renderTh("담당고객", "assigned_clients")}
+                            {!showAvailableOnly && renderTh("삭제시간", "del_timestamp")}
                             <th className="p-3 w-36 text-center align-middle font-semibold">
                                 관리
                             </th>
@@ -554,6 +576,11 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                                                     placeholder="고객A, 고객B..."
                                                 />
                                             </td>
+                                            {!showAvailableOnly && (
+                                                <td className="p-3 text-xs text-gray-500 dark:text-gray-400">
+                                                    {formatKST(am.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-3 text-center space-x-2 whitespace-nowrap">
                                                 <button
                                                     onClick={() =>
@@ -599,6 +626,11 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                                             <td className="p-4">
                                                 {am.assigned_clients}
                                             </td>
+                                            {!showAvailableOnly && (
+                                                <td className="p-4 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                    {formatKST(am.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-4 text-center">
                                                 {am.available === 1 ? (
                                                     <button
@@ -630,7 +662,7 @@ export default function Ams({ loaderData }: Route.ComponentProps) {
                         {processedData.length === 0 && (
                             <tr>
                                 <td
-                                    colSpan={8}
+                                    colSpan={showAvailableOnly ? 8 : 9}
                                     className="p-6 text-center text-gray-500 dark:text-gray-400"
                                 >
                                     등록된 AM이 없습니다.

@@ -21,7 +21,7 @@ import {
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
-        "SELECT id, code, description, lpd, lpw, vendor, available FROM products",
+        "SELECT id, code, description, lpd, lpw, vendor, available, del_timestamp FROM products",
     );
     const products = stmt.all();
     return { products };
@@ -38,7 +38,7 @@ export async function action({ request }: Route.ActionArgs) {
     const lpw = formData.get("lpw");
     const vendor = formData.get("vendor");
 
-    logger.info(`[Products Action] Received intent: ${intent}, ID: ${id}, Code: ${code}`);
+    const now = Date.now();
 
     // intent 값에 따라 DB 작업을 분기합니다.
     if (intent === "add") {
@@ -47,10 +47,10 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(`
-                INSERT INTO products (code, description, lpd, lpw, vendor, available)
-                VALUES (?, ?, ?, ?, ?, 1)
+                INSERT INTO products (code, description, lpd, lpw, vendor, available, create_timestamp)
+                VALUES (?, ?, ?, ?, ?, 1, ?)
             `);
-            stmt.run(code, description, Number(lpd), Number(lpw), vendor || "");
+            stmt.run(code, description, Number(lpd), Number(lpw), vendor || "", now);
             logger.info(`[Products Action] Product Code ${code} added successfully.`);
             return { success: true, intent: "add" };
         } catch (error: any) {
@@ -65,8 +65,8 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "제품 ID가 필요합니다." };
         }
         try {
-            const stmt = db.prepare("UPDATE products SET available = 0 WHERE id = ?");
-            stmt.run(Number(id));
+            const stmt = db.prepare("UPDATE products SET available = 0, del_timestamp = ? WHERE id = ?");
+            stmt.run(now, Number(id));
             logger.info(`[Products Action] Product ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
         } catch (error: any) {
@@ -81,9 +81,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "제품 ID가 필요합니다." };
         }
         try {
-            const stmt = db.prepare("UPDATE products SET available = 1 WHERE id = ?");
+            const stmt = db.prepare("UPDATE products SET available = 1, del_timestamp = NULL WHERE id = ?");
             stmt.run(Number(id));
-            logger.info(`[Products Action] Product ID ${id} restored (available = 1) successfully.`);
+            logger.info(`[Products Action] Product ID ${id} restored (available = 1, del_timestamp = null) successfully.`);
             return { success: true, intent: "restore" };
         } catch (error: any) {
             logger.error(`[Products Action] Failed to restore Product ID ${id}: ${error.stack || error.message}`);
@@ -98,23 +98,45 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "제품 ID가 필요합니다." };
         }
         try {
-            const stmt = db.prepare(`
-                UPDATE products
-                SET description = ?, lpd = ?, lpw = ?, vendor = ?
-                WHERE id = ?
-            `);
-            stmt.run(description, Number(lpd), Number(lpw), vendor || "", Number(id));
+            const stmt = db.prepare(
+                "UPDATE products SET description = ?, lpd = ?, lpw = ?, vendor = ? WHERE id = ?",
+            );
+            stmt.run(
+                description,
+                Number(lpd),
+                Number(lpw),
+                vendor || "",
+                Number(id),
+            );
             logger.info(`[Products Action] Product ID ${id} edited successfully.`);
             return { success: true, intent: "edit" };
         } catch (error: any) {
             logger.error(`[Products Action] Failed to edit Product ID ${id}: ${error.stack || error.message}`);
             return {
-                error: "업데이트 중 오류가 발생했습니다.",
+                error: "제품 수정 중 오류가 발생했습니다.",
                 intent: "edit",
             };
         }
     }
 }
+
+// 한국시간(KST) 포맷터 함수
+const formatKST = (timestamp?: number | string | null) => {
+    if (!timestamp) return "";
+    try {
+        const d = new Date(Number(timestamp));
+        if (isNaN(d.getTime())) return "";
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const date = String(d.getDate()).padStart(2, "0");
+        const hours = String(d.getHours()).padStart(2, "0");
+        const minutes = String(d.getMinutes()).padStart(2, "0");
+        const seconds = String(d.getSeconds()).padStart(2, "0");
+        return `${year}-${month}-${date} ${hours}:${minutes}:${seconds}`;
+    } catch (e) {
+        return "";
+    }
+};
 
 export default function Products({ loaderData }: Route.ComponentProps) {
     const [showAvailableOnly, setShowAvailableOnly] = useState(true);
@@ -415,6 +437,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                             {renderTh("설명", "description")}
                             {renderTh("LP 달러", "lpd")}
                             {renderTh("LP 원화", "lpw")}
+                            {!showAvailableOnly && renderTh("삭제시간", "del_timestamp")}
                             <th className="p-3 w-28 text-center align-middle font-semibold">
                                 관리
                             </th>
@@ -423,7 +446,7 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                     <tbody>
                         {processedData.length === 0 ? (
                             <tr>
-                                <td colSpan={6} className="p-8 text-center text-gray-500">
+                                <td colSpan={showAvailableOnly ? 6 : 7} className="p-8 text-center text-gray-500">
                                     해당되는 제품이 없습니다.
                                 </td>
                             </tr>
@@ -520,6 +543,11 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                                                         />
                                                     </div>
                                                 </td>
+                                                {!showAvailableOnly && (
+                                                    <td className="p-3 text-xs text-gray-500 dark:text-gray-400">
+                                                        {formatKST(product.del_timestamp)}
+                                                    </td>
+                                                )}
                                                 <td className="p-3 text-center space-x-2 whitespace-nowrap">
                                                     <button
                                                         onClick={() =>
@@ -569,6 +597,11 @@ export default function Products({ loaderData }: Route.ComponentProps) {
                                                 <td className="p-4 font-medium text-right text-gray-900 dark:text-white">
                                                     ₩{product.lpw?.toLocaleString()}
                                                 </td>
+                                                {!showAvailableOnly && (
+                                                    <td className="p-4 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                        {formatKST(product.del_timestamp)}
+                                                    </td>
+                                                )}
                                                 <td className="p-4 text-center">
                                                     {product.available === 1 ? (
                                                         <button

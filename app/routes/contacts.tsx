@@ -37,7 +37,8 @@ export async function loader({ request }: Route.LoaderArgs) {
             pc.job_type, 
             pc.email, 
             pc.phone,
-            pc.available
+            pc.available,
+            pc.del_timestamp
         FROM partner_contacts pc
         LEFT JOIN partners p ON pc.partner_id = p.id
     `);
@@ -59,6 +60,8 @@ export async function action({ request }: Route.ActionArgs) {
 
     logger.info(`[Contacts Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
 
+    const now = Date.now();
+
     if (intent === "add") {
         if (!partner_id || !name) {
             return {
@@ -68,8 +71,8 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(`
-                INSERT INTO partner_contacts (partner_id, name, position, job_type, email, phone, available) 
-                VALUES (?, ?, ?, ?, ?, ?, 1)
+                INSERT INTO partner_contacts (partner_id, name, position, job_type, email, phone, available, create_timestamp) 
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
             `);
             stmt.run(
                 Number(partner_id),
@@ -78,6 +81,7 @@ export async function action({ request }: Route.ActionArgs) {
                 job_type,
                 email,
                 phone,
+                now
             );
             logger.info(`[Contacts Action] Contact ${name} added successfully for Partner ID ${partner_id}.`);
             return { success: true, intent: "add" };
@@ -91,9 +95,9 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(
-                "UPDATE partner_contacts SET available = 0 WHERE id = ?",
+                "UPDATE partner_contacts SET available = 0, del_timestamp = ? WHERE id = ?",
             );
-            stmt.run(Number(id));
+            stmt.run(now, Number(id));
             logger.info(`[Contacts Action] Contact ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
         } catch (error: any) {
@@ -106,10 +110,10 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(
-                "UPDATE partner_contacts SET available = 1 WHERE id = ?",
+                "UPDATE partner_contacts SET available = 1, del_timestamp = NULL WHERE id = ?",
             );
             stmt.run(Number(id));
-            logger.info(`[Contacts Action] Contact ID ${id} restored (available = 1) successfully.`);
+            logger.info(`[Contacts Action] Contact ID ${id} restored (available = 1, del_timestamp = null) successfully.`);
             return { success: true, intent: "restore" };
         } catch (error: any) {
             logger.error(`[Contacts Action] Failed to restore contact ID ${id}: ${error.stack || error.message}`);
@@ -147,6 +151,24 @@ export async function action({ request }: Route.ActionArgs) {
     logger.warn(`[Contacts Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
+
+// 한국시간(KST) 포맷터 함수
+const formatKST = (timestamp?: number | string | null) => {
+    if (!timestamp) return "";
+    try {
+        const d = new Date(Number(timestamp));
+        if (isNaN(d.getTime())) return "";
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const date = String(d.getDate()).padStart(2, "0");
+        const hours = String(d.getHours()).padStart(2, "0");
+        const minutes = String(d.getMinutes()).padStart(2, "0");
+        const seconds = String(d.getSeconds()).padStart(2, "0");
+        return `${year}-${month}-${date} ${hours}:${minutes}:${seconds}`;
+    } catch (e) {
+        return "";
+    }
+};
 
 export default function Contacts({ loaderData }: Route.ComponentProps) {
     const [showAvailableOnly, setShowAvailableOnly] = useState(true);
@@ -461,6 +483,7 @@ export default function Contacts({ loaderData }: Route.ComponentProps) {
                             {renderTh("구분", "job_type")}
                             {renderTh("이메일", "email")}
                             {renderTh("전화번호", "phone")}
+                            {!showAvailableOnly && renderTh("삭제시간", "del_timestamp")}
                             <th className="p-3 w-36 text-center align-middle font-semibold">
                                 관리
                             </th>
@@ -537,6 +560,11 @@ export default function Contacts({ loaderData }: Route.ComponentProps) {
                                                     />
                                                 </td>
                                             ))}
+                                            {!showAvailableOnly && (
+                                                <td className="p-3 text-xs text-gray-500 dark:text-gray-400">
+                                                    {formatKST(contact.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-3 text-center space-x-2 whitespace-nowrap">
                                                 <button
                                                     onClick={() =>
@@ -587,6 +615,11 @@ export default function Contacts({ loaderData }: Route.ComponentProps) {
                                             <td className="p-4">
                                                 {contact.phone}
                                             </td>
+                                            {!showAvailableOnly && (
+                                                <td className="p-4 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                    {formatKST(contact.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-4 text-center">
                                                 {contact.available === 1 ? (
                                                     <button
@@ -618,7 +651,7 @@ export default function Contacts({ loaderData }: Route.ComponentProps) {
                         {processedData.length === 0 && (
                             <tr>
                                 <td
-                                    colSpan={7}
+                                    colSpan={showAvailableOnly ? 7 : 8}
                                     className="p-6 text-center text-gray-500 dark:text-gray-400"
                                 >
                                     등록된 파트너사 담당자가 없습니다.

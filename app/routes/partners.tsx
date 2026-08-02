@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
-    const stmt = db.prepare("SELECT id, name, grade, available, vendor FROM partners");
+    const stmt = db.prepare("SELECT id, name, grade, available, vendor, del_timestamp FROM partners");
     const partners = stmt.all();
     return { partners };
 }
@@ -34,7 +34,7 @@ export async function action({ request }: Route.ActionArgs) {
     const vendorList = formData.getAll("vendor") as string[];
     const vendor = vendorList.join(",");
 
-    logger.info(`[Partners Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
+    const now = Date.now();
 
     if (intent === "add") {
         if (!name) {
@@ -42,9 +42,9 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(
-                "INSERT INTO partners (name, grade, available, vendor) VALUES (?, ?, 1, ?)",
+                "INSERT INTO partners (name, grade, available, vendor, create_timestamp) VALUES (?, ?, 1, ?, ?)",
             );
-            stmt.run(name, grade || "", vendor);
+            stmt.run(name, grade || "", vendor, now);
             logger.info(`[Partners Action] Partner ${name} added successfully.`);
             return { success: true, intent: "add" };
         } catch (error: any) {
@@ -56,8 +56,8 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "삭제할 ID가 필요합니다.", intent: "delete" };
         }
         try {
-            const stmt = db.prepare("UPDATE partners SET available = 0 WHERE id = ?");
-            stmt.run(Number(id));
+            const stmt = db.prepare("UPDATE partners SET available = 0, del_timestamp = ? WHERE id = ?");
+            stmt.run(now, Number(id));
             logger.info(`[Partners Action] Partner ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
         } catch (error: any) {
@@ -69,9 +69,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "복구할 ID가 필요합니다.", intent: "restore" };
         }
         try {
-            const stmt = db.prepare("UPDATE partners SET available = 1 WHERE id = ?");
+            const stmt = db.prepare("UPDATE partners SET available = 1, del_timestamp = NULL WHERE id = ?");
             stmt.run(Number(id));
-            logger.info(`[Partners Action] Partner ID ${id} restored (available = 1) successfully.`);
+            logger.info(`[Partners Action] Partner ID ${id} restored (available = 1, del_timestamp = null) successfully.`);
             return { success: true, intent: "restore" };
         } catch (error: any) {
             logger.error(`[Partners Action] Failed to restore Partner ID ${id}: ${error.stack || error.message}`);
@@ -99,6 +99,24 @@ export async function action({ request }: Route.ActionArgs) {
     logger.warn(`[Partners Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
+
+// 한국시간(KST) 포맷터 함수
+const formatKST = (timestamp?: number | string | null) => {
+    if (!timestamp) return "";
+    try {
+        const d = new Date(Number(timestamp));
+        if (isNaN(d.getTime())) return "";
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const date = String(d.getDate()).padStart(2, "0");
+        const hours = String(d.getHours()).padStart(2, "0");
+        const minutes = String(d.getMinutes()).padStart(2, "0");
+        const seconds = String(d.getSeconds()).padStart(2, "0");
+        return `${year}-${month}-${date} ${hours}:${minutes}:${seconds}`;
+    } catch (e) {
+        return "";
+    }
+};
 
 export default function Partners({ loaderData }: Route.ComponentProps) {
     const [showAvailableOnly, setShowAvailableOnly] = useState(true);
@@ -351,6 +369,7 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                                     type="checkbox"
                                     name="vendor"
                                     value="Omnissa"
+                                    defaultChecked
                                     className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
                                 />
                                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Omnissa</span>
@@ -361,45 +380,45 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                         <button
                             type="submit"
                             disabled={addFetcher.state === "submitting"}
-                            className="w-full inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-600 text-white hover:bg-blue-700 h-9 px-4 shadow disabled:opacity-70 disabled:cursor-not-allowed"
+                            className="w-full inline-flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors shadow h-[42px] focus:outline-none focus:ring-2 focus:ring-blue-500"
                         >
-                            {addFetcher.state === "submitting" ? (
-                                "추가 중..."
-                            ) : (
-                                <>
-                                    <Plus className="w-4 h-4 mr-1.5" /> 추가하기
-                                </>
-                            )}
+                            <Plus className="w-5 h-5 mr-1" />
+                            {addFetcher.state === "submitting"
+                                ? "추가 중..."
+                                : "추가"}
                         </button>
                     </div>
                 </addFetcher.Form>
             </div>
 
-            {/* 필터 탭/토글 및 벤더 필터 영역 */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                {/* 벤더 필터 */}
-                <div className="flex items-center gap-3">
-                    <span className="font-bold text-gray-800 dark:text-gray-200 text-sm">벤더 필터</span>
-                    <div className="flex gap-4 items-center px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900">
-                        <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={selectedVendors.includes("Broadcom")}
-                                onChange={(e) => handleVendorFilterCheckbox("Broadcom", e.target.checked)}
-                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
-                            />
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Broadcom</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={selectedVendors.includes("Omnissa")}
-                                onChange={(e) => handleVendorFilterCheckbox("Omnissa", e.target.checked)}
-                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
-                            />
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Omnissa</span>
-                        </label>
-                    </div>
+            {/* 벤더 필터링 영역 및 사용/삭제 탭 */}
+            <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white dark:bg-gray-800 p-4 rounded-lg shadow border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-4">
+                    <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                        벤더 필터:
+                    </span>
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={selectedVendors.includes("Broadcom")}
+                            onChange={(e) =>
+                                handleVendorFilterCheckbox("Broadcom", e.target.checked)
+                            }
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">Broadcom</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={selectedVendors.includes("Omnissa")}
+                            onChange={(e) =>
+                                handleVendorFilterCheckbox("Omnissa", e.target.checked)
+                            }
+                            className="w-4 h-4 text-blue-600 focus:ring-blue-500 rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">Omnissa</span>
+                    </label>
                 </div>
 
                 {/* 사용/삭제 필터 */}
@@ -436,6 +455,7 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                             {renderTh("파트너사명", "name")}
                             {renderTh("등급", "grade")}
                             {renderTh("취급 벤더", "vendor")}
+                            {!showAvailableOnly && renderTh("삭제시간", "del_timestamp")}
                             <th className="p-3 w-36 text-center align-middle font-semibold">
                                 관리
                             </th>
@@ -518,6 +538,11 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                                                     </label>
                                                 </div>
                                             </td>
+                                            {!showAvailableOnly && (
+                                                <td className="p-3 text-xs text-gray-500 dark:text-gray-400">
+                                                    {formatKST(partner.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-3 text-center space-x-2 whitespace-nowrap">
                                                 <button
                                                     onClick={() =>
@@ -573,6 +598,11 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                                                     })}
                                                 </div>
                                             </td>
+                                            {!showAvailableOnly && (
+                                                <td className="p-4 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                    {formatKST(partner.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-4 text-center">
                                                 {partner.available === 1 ? (
                                                     <button
@@ -604,7 +634,7 @@ export default function Partners({ loaderData }: Route.ComponentProps) {
                         {processedData.length === 0 && (
                             <tr>
                                 <td
-                                    colSpan={4}
+                                    colSpan={showAvailableOnly ? 4 : 5}
                                     className="p-6 text-center text-gray-500 dark:text-gray-400"
                                 >
                                     등록된 파트너사가 없습니다.

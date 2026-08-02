@@ -21,7 +21,7 @@ import {
 
 export async function loader({ request }: Route.LoaderArgs) {
     const stmt = db.prepare(
-        "SELECT id, name, position, available FROM dist_contacts ORDER BY name ASC",
+        "SELECT id, name, position, available, del_timestamp FROM dist_contacts ORDER BY name ASC",
     );
     const distContacts = stmt.all();
     return { distContacts };
@@ -34,7 +34,7 @@ export async function action({ request }: Route.ActionArgs) {
     const name = formData.get("name") as string;
     const position = (formData.get("position") as string) || "";
 
-    logger.info(`[Dist Action] Received intent: ${intent}, ID: ${id}, Name: ${name}`);
+    const now = Date.now();
 
     if (intent === "add") {
         if (!name) {
@@ -42,9 +42,9 @@ export async function action({ request }: Route.ActionArgs) {
         }
         try {
             const stmt = db.prepare(
-                "INSERT INTO dist_contacts (name, position, available) VALUES (?, ?, 1)",
+                "INSERT INTO dist_contacts (name, position, available, create_timestamp) VALUES (?, ?, 1, ?)",
             );
-            stmt.run(name, position);
+            stmt.run(name, position, now);
             logger.info(`[Dist Action] Dist contact ${name} added successfully.`);
             return { success: true, intent: "add" };
         } catch (error: any) {
@@ -56,8 +56,8 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "삭제할 ID가 필요합니다.", intent: "delete" };
         }
         try {
-            const stmt = db.prepare("UPDATE dist_contacts SET available = 0 WHERE id = ?");
-            stmt.run(Number(id));
+            const stmt = db.prepare("UPDATE dist_contacts SET available = 0, del_timestamp = ? WHERE id = ?");
+            stmt.run(now, Number(id));
             logger.info(`[Dist Action] Dist contact ID ${id} archived (available = 0) successfully.`);
             return { success: true, intent: "delete" };
         } catch (error: any) {
@@ -69,9 +69,9 @@ export async function action({ request }: Route.ActionArgs) {
             return { error: "복구할 ID가 필요합니다.", intent: "restore" };
         }
         try {
-            const stmt = db.prepare("UPDATE dist_contacts SET available = 1 WHERE id = ?");
+            const stmt = db.prepare("UPDATE dist_contacts SET available = 1, del_timestamp = NULL WHERE id = ?");
             stmt.run(Number(id));
-            logger.info(`[Dist Action] Dist contact ID ${id} restored (available = 1) successfully.`);
+            logger.info(`[Dist Action] Dist contact ID ${id} restored (available = 1, del_timestamp = null) successfully.`);
             return { success: true, intent: "restore" };
         } catch (error: any) {
             logger.error(`[Dist Action] Failed to restore dist contact ID ${id}: ${error.stack || error.message}`);
@@ -96,6 +96,24 @@ export async function action({ request }: Route.ActionArgs) {
     logger.warn(`[Dist Action] Unknown intent received: ${intent}`);
     return { error: "알 수 없는 액션입니다." };
 }
+
+// 한국시간(KST) 포맷터 함수
+const formatKST = (timestamp?: number | string | null) => {
+    if (!timestamp) return "";
+    try {
+        const d = new Date(Number(timestamp));
+        if (isNaN(d.getTime())) return "";
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const date = String(d.getDate()).padStart(2, "0");
+        const hours = String(d.getHours()).padStart(2, "0");
+        const minutes = String(d.getMinutes()).padStart(2, "0");
+        const seconds = String(d.getSeconds()).padStart(2, "0");
+        return `${year}-${month}-${date} ${hours}:${minutes}:${seconds}`;
+    } catch (e) {
+        return "";
+    }
+};
 
 export default function DistContacts({ loaderData }: Route.ComponentProps) {
     const [showAvailableOnly, setShowAvailableOnly] = useState(true);
@@ -346,6 +364,7 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                         <tr className="bg-gray-100 dark:bg-gray-700 border-b dark:border-gray-600 text-gray-800 dark:text-gray-200 divide-x divide-gray-200 dark:divide-gray-600">
                             {renderTh("담당자명", "name")}
                             {renderTh("직급", "position")}
+                            {!showAvailableOnly && renderTh("삭제시간", "del_timestamp")}
                             <th className="p-3 w-36 text-center align-middle font-semibold">
                                 관리
                             </th>
@@ -396,6 +415,11 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                                                     </td>
                                                 ),
                                             )}
+                                            {!showAvailableOnly && (
+                                                <td className="p-3 text-xs text-gray-500 dark:text-gray-400">
+                                                    {formatKST(contact.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-3 text-center space-x-2 whitespace-nowrap">
                                                 <button
                                                     onClick={() =>
@@ -434,6 +458,11 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                                             <td className="p-4">
                                                 {contact.position}
                                             </td>
+                                            {!showAvailableOnly && (
+                                                <td className="p-4 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                                                    {formatKST(contact.del_timestamp)}
+                                                </td>
+                                            )}
                                             <td className="p-4 text-center">
                                                 {contact.available === 1 ? (
                                                     <button
@@ -465,7 +494,7 @@ export default function DistContacts({ loaderData }: Route.ComponentProps) {
                         {processedData.length === 0 && (
                             <tr>
                                 <td
-                                    colSpan={3}
+                                    colSpan={showAvailableOnly ? 3 : 4}
                                     className="p-6 text-center text-gray-500 dark:text-gray-400"
                                 >
                                     등록된 총판 담당자가 없습니다.

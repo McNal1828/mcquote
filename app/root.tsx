@@ -155,7 +155,14 @@ export default function App({ loaderData, actionData }: Route.ComponentProps) {
 
     useEffect(() => {
         setMounted(true);
-        setIsDarkMode(document.documentElement.classList.contains("dark"));
+        const savedTheme = localStorage.getItem("theme");
+        const isDark = savedTheme === "dark" || (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        setIsDarkMode(isDark);
+        if (isDark) {
+            document.documentElement.classList.add("dark");
+        } else {
+            document.documentElement.classList.remove("dark");
+        }
     }, []);
 
     const toggleTheme = () => {
