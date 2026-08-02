@@ -20,6 +20,37 @@ export function getFinalProducts(
             const baseUnitLpw = Math.round((lpw * period) / 1000) * 1000;
             let supplyPrice = 0;
 
+            if (currentMode === "MANUAL") {
+                // 수동 모드: 사용자가 입력한 달러net과 공급가를 절대적 기준으로 채택하여 마진/마진율 역산
+                const manualDollarNet = prod.달러net !== undefined && prod.달러net !== null
+                    ? Number(prod.달러net)
+                    : (prod.netdollar !== undefined && prod.netdollar !== null ? Number(prod.netdollar) : dollarNet);
+                const manualSupplyPrice = prod.공급가 !== undefined && prod.공급가 !== null
+                    ? Number(prod.공급가)
+                    : (prod.supply_price !== undefined && prod.supply_price !== null ? Number(prod.supply_price) : 0);
+
+                const calcDollarPpc = (qty * period > 0) ? (manualDollarNet / (qty * period)) : 0;
+                const calcWonNet = manualDollarNet * exchangeRate;
+                const calcMargin = manualSupplyPrice - calcWonNet;
+                const calcMarginPercent = manualSupplyPrice > 0
+                    ? ((calcMargin / manualSupplyPrice) * 100).toFixed(1)
+                    : "0.0";
+                const calcWonPpc = (qty * period > 0) ? Math.round(manualSupplyPrice / (qty * period)) : 0;
+
+                return {
+                    ...prod,
+                    DC원화: dcWon,
+                    달러PPC: calcDollarPpc,
+                    달러원가: dollarCost,
+                    달러net: manualDollarNet,
+                    netdollar: manualDollarNet,
+                    공급가: manualSupplyPrice,
+                    마진: calcMargin,
+                    원화PPC: calcWonPpc,
+                    마진율: calcMarginPercent,
+                };
+            }
+
             if (currentMode === "PPC" && prod.원화PPC !== undefined) {
                 supplyPrice = Number(prod.원화PPC) * qty * period;
             } else if (currentMode === "MARGIN" && prod.마진율 !== undefined) {
@@ -59,6 +90,7 @@ export function getFinalProducts(
                 달러PPC: dollarPpc,
                 달러원가: dollarCost,
                 달러net: dollarNet,
+                netdollar: dollarNet,
                 공급가: supplyPrice,
                 마진: margin,
                 원화PPC:

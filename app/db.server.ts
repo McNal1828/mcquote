@@ -104,12 +104,14 @@ db.exec(`
     is_ordered INTEGER DEFAULT 0, -- 주문 여부
     is_lost INTEGER DEFAULT 0, -- 실주 여부
     products_history TEXT, -- 이력 관리
+    gas_note TEXT, -- 대표 비고
     
     FOREIGN KEY (partner_id) REFERENCES partners(id),
     FOREIGN KEY (partner_contact_id) REFERENCES partner_contacts(id),
     FOREIGN KEY (am_id) REFERENCES ams(id),
     FOREIGN KEY (dist_contact_id) REFERENCES dist_contacts(id)
   );
+
 `);
 
 // 7. 견적 내 제품 그룹(탭) 정보 테이블 생성

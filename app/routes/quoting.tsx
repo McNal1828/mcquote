@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
     useSubmit,
     useActionData,
@@ -25,6 +25,8 @@ import {
     Download,
     AlertCircle,
     CheckCircle2,
+    Search,
+    ChevronDown,
 } from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -63,7 +65,7 @@ export async function action({ request }: Route.ActionArgs) {
     const data = await request.json();
     const { basicInfo, dealFlows, products, notes, calcMode, defaultGroup, syncToGas } = data;
     const now = Date.now();
-    const quote_type = calcMode === "PPC" ? 0 : 1;
+    const quote_type = calcMode === "PPC" ? 0 : (calcMode === "DC" ? 1 : (calcMode === "MARGIN" ? 2 : 3));
     const nextSyncToGas = syncToGas ? 1 : 0;
 
     logger.info(`[Quoting Action] Received new quote creation request for Client: ${basicInfo?.clientCompany || "Unknown"}, Project: ${basicInfo?.projectName || "Unknown"}`);
@@ -98,9 +100,11 @@ export async function action({ request }: Route.ActionArgs) {
                     project_name, quote_type, created_at, updated_at, 
                     contract_type, deal_flow, stage, note,
                     partner_id, partner_contact_id, am_id, dist_contact_id,
-                    products_history, sync_to_gas
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    products_history, sync_to_gas, gas_note
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
+
+            const gasNoteVal = notes && notes.length > 0 ? (notes[0] || "").trim() : "";
 
             const info = stmt.run(
                 basicInfo.clientCompany,
@@ -121,6 +125,7 @@ export async function action({ request }: Route.ActionArgs) {
                 basicInfo.distContactId ? Number(basicInfo.distContactId) : null,
                 products_history,
                 nextSyncToGas,
+                gasNoteVal,
             );
 
             newQuoteId = info.lastInsertRowid;
@@ -149,8 +154,8 @@ export async function action({ request }: Route.ActionArgs) {
                     group_id, line_number, product_id, description, lpd, lpw, 
                     quantity, period, dc_usd, exchange_rate, dc_krw, 
                     supply_price, margin, margin_rate, year, krw_ppc,
-                    month, stage
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    month, stage, usd_ppc, netdollar
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             const selectProduct = db.prepare("SELECT id FROM products WHERE code = ?");
@@ -169,16 +174,23 @@ export async function action({ request }: Route.ActionArgs) {
                     const productRow = selectProduct.get(productCode) as { id: number } | undefined;
                     const productId = productRow ? productRow.id : null;
 
+                    const lpdVal = Number(line.lpd) || 0;
+                    const qtyVal = Number(line.수량) || 1;
+                    const periodVal = Number(line.기간) || 1;
+                    const dcUsdVal = Number(line.DC달러) || 0;
+                    const usdPpcVal = Number(line.달러PPC !== undefined ? line.달러PPC : (lpdVal * (1 - dcUsdVal / 100))) || 0;
+                    const usdTotalVal = Number(line.달러net !== undefined ? line.달러net : (usdPpcVal * qtyVal * periodVal)) || 0;
+
                     const lineInfo = insertLine.run(
                         groupId,
                         index + 1, // line_number
                         productId,
                         line.제품설명 || "",
-                        Number(line.lpd) || 0,
+                        lpdVal,
                         Number(line.lpw) || 0,
-                        Number(line.수량) || 1,
-                        Number(line.기간) || 1,
-                        Number(line.DC달러) || 0,
+                        qtyVal,
+                        periodVal,
+                        dcUsdVal,
                         Number(line.환율) || 0,
                         Number(line.DC원화) || 0,
                         Number(line.공급가) || 0,
@@ -187,7 +199,9 @@ export async function action({ request }: Route.ActionArgs) {
                         Number(line.년차) || 1, // 매출년 (년차)
                         Number(line.원화PPC) || 0,
                         Number(line.매출월) || 1, // 매출월
-                        Number(line.stage) || 10 // stage (라인별 단계 기본값 10%)
+                        Number(line.stage) || 10, // stage (라인별 단계 기본값 10%)
+                        usdPpcVal,
+                        usdTotalVal
                     );
 
                     // 기본 그룹일 경우 구글 시트 동기화 대상에 추가
@@ -202,7 +216,8 @@ export async function action({ request }: Route.ActionArgs) {
                             lpd: Number(line.lpd) || 0,
                             수량: Number(line.수량) || 1,
                             기간: Number(line.기간) || 1,
-                            DC달러: Number(line.DC달러) || 0
+                            DC달러: Number(line.DC달러) || 0,
+                            netdollar: usdTotalVal
                         });
                     }
                 });
@@ -218,8 +233,9 @@ export async function action({ request }: Route.ActionArgs) {
             const amName = db.prepare("SELECT name FROM ams WHERE id = ?").get(Number(basicInfo.amId))?.name || "";
             const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
 
+            const representNote = Array.isArray(notes) && notes.length > 0 ? (notes[0] || "") : "";
+
             const addRows = defaultLinesToSync.map((line) => {
-                const netdollar = line.lpd * line.수량 * line.기간 * (1 - line.DC달러 / 100);
                 return {
                     id: line.id,
                     year: line.년차,
@@ -233,7 +249,8 @@ export async function action({ request }: Route.ActionArgs) {
                     stage: line.stage,
                     price: line.공급가,
                     margin: line.마진,
-                    netdollar: netdollar
+                    netdollar: line.netdollar,
+                    note: representNote
                 };
             });
 
@@ -289,91 +306,102 @@ function GroupNameInput({ value, onRename }: GroupNameInputProps) {
 }
 
 interface SearchableSelectProps {
-    label: string;
-    options: { id: string | number; name: string }[];
+    label?: string;
+    options: { id: string | number; label: string; subText?: string }[];
     value: string;
     placeholder: string;
     onChange: (value: string) => void;
+    disabled?: boolean;
 }
 
-function SearchableSelect({ label, options, value, placeholder, onChange }: SearchableSelectProps) {
+function SearchableSelect({ label, options, value, placeholder, onChange, disabled }: SearchableSelectProps) {
     const [isOpen, setIsOpen] = useState(false);
-    const [search, setSearch] = useState("");
+    const [searchTerm, setSearchTerm] = useState("");
+    const wrapperRef = useRef<HTMLDivElement>(null);
 
-    const selectedOption = options.find((o) => o.id.toString() === value.toString());
-    const displayName = selectedOption ? selectedOption.name : "";
-
-    const filtered = options.filter((o) =>
-        o.name.toLowerCase().includes(search.toLowerCase())
-    );
+    const selectedOption = options.find((opt) => String(opt.id) === String(value));
+    const isUnassigned = !selectedOption || selectedOption.label === "미지정" || String(selectedOption.id) === "none" || String(selectedOption.id) === "0";
 
     useEffect(() => {
-        if (!isOpen) return;
-        const handleOutsideClick = (e: MouseEvent) => {
-            const target = e.target as HTMLElement;
-            // Clean dynamic class name for selector
-            const sanitizedLabel = label.replace(/[^a-zA-Z0-9]/g, "");
-            if (!target.closest(`.searchable-select-${sanitizedLabel}`)) {
+        function handleClickOutside(event: MouseEvent) {
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
                 setIsOpen(false);
             }
-        };
-        document.addEventListener("mousedown", handleOutsideClick);
-        return () => document.removeEventListener("mousedown", handleOutsideClick);
-    }, [isOpen, label]);
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    const filteredOptions = options.filter((opt) =>
+        opt.label.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (opt.subText && opt.subText.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
 
     return (
-        <div className={`relative searchable-select-${label.replace(/[^a-zA-Z0-9]/g, "")}`}>
-            <label className="block text-xs font-medium text-gray-500 mb-1">
-                {label}
-            </label>
+        <div ref={wrapperRef} className="relative w-full">
+            {label && (
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                    {label}
+                </label>
+            )}
             <button
                 type="button"
+                disabled={disabled}
                 onClick={() => {
-                    setIsOpen(!isOpen);
-                    setSearch("");
+                    if (!disabled) setIsOpen(!isOpen);
                 }}
-                className="w-full px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-900 dark:text-white text-sm text-left flex justify-between items-center focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className={`w-full flex items-center justify-between px-3 py-1.5 text-sm border rounded bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 text-left ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
             >
-                <span className={displayName ? "text-gray-800 dark:text-gray-200" : "text-gray-400 dark:text-gray-500"}>
-                    {displayName || placeholder}
+                <span className={`truncate ${isUnassigned ? "text-gray-400 dark:text-gray-500" : "text-gray-900 dark:text-white font-medium"}`}>
+                    {selectedOption ? selectedOption.label : placeholder}
                 </span>
-                <span className="text-gray-400 text-xs">▼</span>
+                <ChevronDown className="w-4 h-4 text-gray-400 shrink-0 ml-1" />
             </button>
 
             {isOpen && (
-                <div className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg max-h-60 overflow-hidden flex flex-col">
-                    <div className="p-2 border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
+                <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-md shadow-lg max-h-60 overflow-auto">
+                    <div className="p-2 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 flex items-center gap-2 z-10">
+                        <Search className="w-4 h-4 text-gray-400 shrink-0" />
                         <input
                             type="text"
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
                             placeholder="검색..."
-                            className="w-full px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="w-full text-xs bg-transparent border-none focus:outline-none text-gray-900 dark:text-white"
                             autoFocus
                         />
                     </div>
-                    <div className="overflow-y-auto flex-1 max-h-48 py-1">
-                        {filtered.length === 0 ? (
-                            <div className="px-3 py-2 text-xs text-gray-400 text-center">
-                                검색 결과가 없습니다
-                            </div>
+                    <div className="py-1">
+                        {filteredOptions.length === 0 ? (
+                            <div className="px-3 py-2 text-xs text-gray-400 text-center">검색 결과가 없습니다.</div>
                         ) : (
-                            filtered.map((opt) => (
-                                <button
-                                    key={opt.id}
-                                    type="button"
-                                    onClick={() => {
-                                        onChange(opt.id.toString());
-                                        setIsOpen(false);
-                                    }}
-                                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors ${opt.id.toString() === value.toString()
-                                        ? "bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-semibold"
-                                        : "text-gray-700 dark:text-gray-300"
-                                        }`}
-                                >
-                                    {opt.name}
-                                </button>
-                            ))
+                            filteredOptions.map((opt) => {
+                                const isOptUnassigned = opt.label === "미지정" || String(opt.id) === "none" || String(opt.id) === "0";
+                                return (
+                                    <button
+                                        key={opt.id}
+                                        type="button"
+                                        onClick={() => {
+                                            onChange(String(opt.id));
+                                            setIsOpen(false);
+                                            setSearchTerm("");
+                                        }}
+                                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center justify-between ${String(opt.id) === String(value)
+                                            ? "bg-blue-50 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 font-semibold"
+                                            : isOptUnassigned
+                                                ? "text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                                : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                                            }`}
+                                    >
+                                        <span>{opt.label}</span>
+                                        {opt.subText && (
+                                            <span className="text-[10px] text-gray-400 ml-2 truncate max-w-[100px]">
+                                                {opt.subText}
+                                            </span>
+                                        )}
+                                    </button>
+                                );
+                            })
                         )}
                     </div>
                 </div>
@@ -417,7 +445,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
     // 3. 비고 상태 관리
     const [notes, setNotes] = useState<string[]>([""]);
 
-    const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN">("DC");
+    const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN" | "MANUAL">("DC");
     const [defaultGroup, setDefaultGroup] = useState<string>("원가표1");
     const [syncToGas, setSyncToGas] = useState<boolean>(true);
 
@@ -818,6 +846,36 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         }
 
         const blob = await response.blob();
+
+        // 1. File System Access API (showSaveFilePicker) 지원 브라우저인 경우 '다른 이름으로 저장 창' 노출
+        if ("showSaveFilePicker" in window) {
+            try {
+                const handle = await (window as any).showSaveFilePicker({
+                    suggestedName: filename,
+                    types: [
+                        {
+                            description: "Excel Spreadsheet",
+                            accept: {
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+                            },
+                        },
+                    ],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                return;
+            } catch (err: any) {
+                // 사용자가 창에서 '취소'를 누른 경우 예외 처리
+                if (err.name === "AbortError") {
+                    console.log(`[Save Canceled] User canceled saving ${filename}`);
+                    return;
+                }
+                console.warn(`[Save Picker Warning] ${err.message}. Falling back to normal download.`);
+            }
+        }
+
+        // 2. 미지원 브라우저 또는 Fallback 기본 다운로드 방식
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -864,18 +922,19 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
 
             const finalGroupedProducts = getFinalProducts(grouped, calcMode);
 
-            await Promise.all([
-                downloadFile(
-                    "cost",
-                    `${prefix}-원가표.xlsx`,
-                    finalGroupedProducts,
-                ),
-                downloadFile(
-                    "quote",
-                    `${prefix}-견적서.xlsx`,
-                    finalGroupedProducts,
-                ),
-            ]);
+            // 1번째 원가표.xlsx 저장 대화창 노출
+            await downloadFile(
+                "cost",
+                `${prefix}-원가표.xlsx`,
+                finalGroupedProducts,
+            );
+
+            // 2번째 견적서.xlsx 저장 대화창 노출
+            await downloadFile(
+                "quote",
+                `${prefix}-견적서.xlsx`,
+                finalGroupedProducts,
+            );
         } catch (error) {
             console.error(error);
             alert("엑셀 다운로드 중 오류가 발생했습니다.");
@@ -1014,45 +1073,49 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                         </h4>
                         <SearchableSelect
                             label="파트너사명"
-                            options={(loaderData.partners as any[] || []).filter(
-                                (p: any) =>
-                                    !basicInfo.vendor ||
-                                    (p.vendor ? p.vendor.split(",").includes(basicInfo.vendor) : false)
-                            )}
+                            options={[
+                                { id: "none", label: "미지정" },
+                                ...(loaderData.partners as any[] || [])
+                                    .filter((p: any) => !basicInfo.vendor || (p.vendor ? p.vendor.split(",").includes(basicInfo.vendor) : false))
+                                    .map((p: any) => ({ id: p.id, label: p.name }))
+                            ]}
                             value={basicInfo.partnerId}
                             placeholder="파트너사 선택"
                             onChange={(val) => updateBasicInfoValue("partnerId", val)}
                         />
                         <SearchableSelect
                             label="담당자 이름"
-                            options={(loaderData.partnerContacts as any[] || []).filter(
-                                (c: any) =>
-                                    !basicInfo.partnerId ||
-                                    c.partner_id.toString() === basicInfo.partnerId,
-                            )}
+                            options={[
+                                { id: "none", label: "미지정" },
+                                ...(loaderData.partnerContacts as any[] || [])
+                                    .filter((c: any) => !basicInfo.partnerId || basicInfo.partnerId === "none" || c.partner_id.toString() === basicInfo.partnerId)
+                                    .map((c: any) => {
+                                        const p = (loaderData.partners as any[] || []).find((p: any) => p.id === c.partner_id);
+                                        return { id: c.id, label: c.name, subText: p ? p.name : "" };
+                                    })
+                            ]}
                             value={basicInfo.partnerContactId}
                             placeholder="담당자 선택"
                             onChange={(val) => updateBasicInfoValue("partnerContactId", val)}
                         />
                         <SearchableSelect
                             label="총판 담당자"
-                            options={loaderData.distContacts as any[]}
+                            options={[
+                                { id: "none", label: "미지정" },
+                                ...(loaderData.distContacts as any[] || []).map((dc: any) => ({ id: dc.id, label: dc.name }))
+                            ]}
                             value={basicInfo.distContactId}
                             placeholder="총판 담당자 선택"
                             onChange={(val) => updateBasicInfoValue("distContactId", val)}
                         />
                         <SearchableSelect
                             label="담당AM"
-                            options={loaderData.ams
-                                .filter(
-                                    (a: any) =>
-                                        !basicInfo.vendor ||
-                                        basicInfo.vendor.split(",").includes(a.vendor),
-                                )
-                                .map((a: any) => ({
-                                    id: a.id,
-                                    name: a.vendor ? `${a.name} (${a.vendor})` : a.name,
-                                }))}
+                            options={[
+                                { id: "none", label: "미지정" },
+                                ...(loaderData.ams as any[] || [])
+                                    .filter((a: any) => !basicInfo.vendor || (a.vendor ? a.vendor.split(",").includes(basicInfo.vendor) : false))
+                                    .map((a: any) => ({ id: a.id, label: a.name, subText: a.vendor || "" }))
+                            ]}
                             value={basicInfo.amId}
                             placeholder="AM 선택"
                             onChange={(val) => updateBasicInfoValue("amId", val)}
@@ -1129,14 +1192,37 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                     </div>
                 </div>
 
-                {/* 2. 제품 상세 테이블 */}
+                {/* 2. 견적 상세 테이블 */}
                 <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-                        <div className="flex justify-between items-center">
-                            <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
-                                <Package className="w-5 h-5 mr-2 text-gray-500" />{" "}
-                                제품 상세 설정
-                            </h3>
+                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                            <div className="flex items-center gap-4 flex-wrap">
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg whitespace-nowrap">
+                                    <Package className="w-5 h-5 mr-2 text-gray-500" />{" "}
+                                    견적 상세 설정
+                                </h3>
+                                {/* 대표비고 입력창 */}
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                                        대표비고:
+                                    </span>
+                                    <input
+                                        type="text"
+                                        value={notes[0] || ""}
+                                        onChange={(e) => {
+                                            const val = e.target.value;
+                                            setNotes((prev) => {
+                                                const next = [...prev];
+                                                if (next.length === 0) return [val];
+                                                next[0] = val;
+                                                return next;
+                                            });
+                                        }}
+                                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 md:w-80"
+                                        placeholder="대표 비고를 입력하세요"
+                                    />
+                                </div>
+                            </div>
                             <div className="flex items-center gap-4">
                                 {/* 계산 기준 선택 영역 */}
                                 <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 p-1.5 rounded border border-gray-200 dark:border-gray-600">
@@ -1180,6 +1266,19 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                         />
                                         <span className="text-sm text-gray-700 dark:text-gray-300">
                                             마진
+                                        </span>
+                                    </label>
+                                    <label className="flex items-center gap-1.5 cursor-pointer px-1">
+                                        <input
+                                            type="radio"
+                                            name="calcMode"
+                                            value="MANUAL"
+                                            checked={calcMode === "MANUAL"}
+                                            onChange={handleCalcModeChange}
+                                            className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span className="text-sm text-blue-600 dark:text-blue-400 font-semibold">
+                                            수동
                                         </span>
                                     </label>
                                 </div>

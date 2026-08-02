@@ -68,47 +68,47 @@ export async function loader({ request }: Route.LoaderArgs) {
         endTimestamp,
     ];
 
-    // 2. 파트너사별 통계 (내림차순, 0건 제외)
+    // 2. 파트너사별 통계 (내림차순, 미지정 포함)
     const partnerStats = db
         .prepare(
             `
-        SELECT p.id as partner_id, p.name as partner_name, COUNT(q.id) as quote_count
+        SELECT COALESCE(p.id, 0) as partner_id, COALESCE(p.name, '미지정') as partner_name, COUNT(q.id) as quote_count
         FROM quotes q
-        JOIN partners p ON q.partner_id = p.id
+        LEFT JOIN partners p ON q.partner_id = p.id
         WHERE ${timeFilter}
-        GROUP BY p.id, p.name
+        GROUP BY COALESCE(p.id, 0), COALESCE(p.name, '미지정')
         HAVING quote_count > 0
-        ORDER BY quote_count DESC
+        ORDER BY (CASE WHEN p.id IS NULL THEN 1 ELSE 0 END), quote_count DESC
     `,
         )
         .all(...timeParams);
 
-    // 3. 파트너사 담당자별 통계 (내림차순, 0건 제외)
+    // 3. 파트너사 담당자별 통계 (내림차순, 미지정 포함)
     const partnerContactStats = db
         .prepare(
             `
-        SELECT pc.partner_id, pc.id as contact_id, pc.name as contact_name, COUNT(q.id) as quote_count
+        SELECT COALESCE(q.partner_id, 0) as partner_id, COALESCE(pc.id, 0) as contact_id, COALESCE(pc.name, '미지정') as contact_name, COUNT(q.id) as quote_count
         FROM quotes q
-        JOIN partner_contacts pc ON q.partner_contact_id = pc.id
+        LEFT JOIN partner_contacts pc ON q.partner_contact_id = pc.id
         WHERE ${timeFilter}
-        GROUP BY pc.partner_id, pc.id, pc.name
+        GROUP BY COALESCE(q.partner_id, 0), COALESCE(pc.id, 0), COALESCE(pc.name, '미지정')
         HAVING quote_count > 0
-        ORDER BY quote_count DESC
+        ORDER BY (CASE WHEN pc.id IS NULL THEN 1 ELSE 0 END), quote_count DESC
     `,
         )
         .all(...timeParams);
 
-    // 4. 총판 담당자별 통계 (내림차순, 0건 제외)
+    // 4. 총판 담당자별 통계 (내림차순, 미지정 포함)
     const distContactStats = db
         .prepare(
             `
-        SELECT dc.id as dist_contact_id, dc.name as dist_contact_name, COUNT(q.id) as quote_count
+        SELECT COALESCE(dc.id, 0) as dist_contact_id, COALESCE(dc.name, '미지정') as dist_contact_name, COUNT(q.id) as quote_count
         FROM quotes q
-        JOIN dist_contacts dc ON q.dist_contact_id = dc.id
+        LEFT JOIN dist_contacts dc ON q.dist_contact_id = dc.id
         WHERE ${timeFilter}
-        GROUP BY dc.id, dc.name
+        GROUP BY COALESCE(dc.id, 0), COALESCE(dc.name, '미지정')
         HAVING quote_count > 0
-        ORDER BY quote_count DESC
+        ORDER BY (CASE WHEN dc.id IS NULL THEN 1 ELSE 0 END), quote_count DESC
     `,
         )
         .all(...timeParams);
@@ -138,18 +138,18 @@ export async function loader({ request }: Route.LoaderArgs) {
         )
         .all(...timeParams);
 
-    // 6. 벤더 담당자(AM)별 통계 (내림차순, 0건 제외)
+    // 6. 벤더 담당자(AM)별 통계 (내림차순, 미지정 포함)
     const amStats = db
         .prepare(
             `
-        SELECT qv.vendor as vendor_name, a.id as am_id, a.name as am_name, COUNT(q.id) as quote_count
+        SELECT qv.vendor as vendor_name, COALESCE(a.id, 0) as am_id, COALESCE(a.name, '미지정') as am_name, COUNT(q.id) as quote_count
         FROM quotes q
-        JOIN ams a ON q.am_id = a.id
         JOIN quote_vendors qv ON q.id = qv.quote_id
+        LEFT JOIN ams a ON q.am_id = a.id
         WHERE ${timeFilter} AND qv.vendor IS NOT NULL AND qv.vendor != ''
-        GROUP BY qv.vendor, a.id, a.name
+        GROUP BY qv.vendor, COALESCE(a.id, 0), COALESCE(a.name, '미지정')
         HAVING quote_count > 0
-        ORDER BY quote_count DESC
+        ORDER BY (CASE WHEN a.id IS NULL THEN 1 ELSE 0 END), quote_count DESC
     `,
         )
         .all(...timeParams);
@@ -161,7 +161,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         return acc;
     }, {});
 
-    // 7. 견적 상세 데이터 조회 (실시간 연산을 위한 필드 확장)
+    // 7. 견적 상세 데이터 조회 (실시간 연산을 위한 필드 확장, COALESCE로 0 처리)
     const rawQuotes = db
         .prepare(
             `
@@ -171,9 +171,9 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.updated_at,
             q.is_ordered,
             q.is_lost,
-            q.partner_id,
-            p.name as partner_name,
-            q.dist_contact_id,
+            COALESCE(q.partner_id, 0) as partner_id,
+            COALESCE(p.name, '미지정') as partner_name,
+            COALESCE(q.dist_contact_id, 0) as dist_contact_id,
             (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendors,
             CASE WHEN q.is_lost = 1 THEN 0 ELSE COALESCE((
                 SELECT SUM(ql.supply_price)
@@ -341,10 +341,13 @@ export default function StatsPartner({ loaderData }: Route.ComponentProps) {
     // 실시간 필터링된 견적 데이터
     const filteredQuotes = useMemo(() => {
         return (rawQuotes as any[]).filter((q) => {
+            const partnerId = q.partner_id !== null && q.partner_id !== undefined ? q.partner_id : 0;
+            const distContactId = q.dist_contact_id !== null && q.dist_contact_id !== undefined ? q.dist_contact_id : 0;
+
             // 1. 파트너 필터
-            if (!activePartners.has(q.partner_id)) return false;
+            if (!activePartners.has(partnerId)) return false;
             // 2. 총판 담당자 필터
-            if (!activeDistContacts.has(q.dist_contact_id)) return false;
+            if (!activeDistContacts.has(distContactId)) return false;
             // 3. 벤더 필터
             const vList = q.vendors ? q.vendors.split(",") : [];
             if (vList.length > 0) {

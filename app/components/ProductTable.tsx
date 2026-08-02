@@ -23,25 +23,25 @@ export default function ProductTable({
 }: ProductTableProps) {
   return (
     <div className="overflow-x-auto rounded-md border border-gray-200 dark:border-gray-700">
-      <table className="w-full text-xs text-left table-fixed min-w-[1250px]">
+      <table className="w-full text-sm text-left table-fixed min-w-[1380px]">
         <thead className="bg-gray-50 dark:bg-gray-800/80 text-gray-700 dark:text-gray-300 border-b dark:border-gray-700 whitespace-nowrap">
           <tr className="divide-x divide-gray-200 dark:divide-gray-700">
-            <th className="p-1.5 font-semibold text-center w-16">매출년</th>
-            <th className="p-1.5 font-semibold text-center w-12">매출월</th>
-            <th className="p-1.5 font-semibold text-center w-32">제품코드</th>
-            <th className="p-1.5 font-semibold text-center w-16">수량</th>
-            <th className="p-1.5 font-semibold text-center w-10">기간</th>
-            <th className="p-1.5 font-semibold text-center w-17">DC달러(%)</th>
-            <th className="p-1.5 font-semibold text-center w-22">달러PPC($)</th>
-            <th className="p-1.5 font-semibold text-center w-22">달러net($)</th>
-            <th className="p-1.5 font-semibold text-center w-15">환율(₩)</th>
-            <th className="p-1.5 font-semibold text-center w-24">원화PPC(₩)</th>
-            <th className="p-1.5 font-semibold text-center w-17">DC원화(%)</th>
-            <th className="p-1.5 font-semibold text-center w-24">공급가(₩)</th>
-            <th className="p-1.5 font-semibold text-center w-24">마진(₩)</th>
-            <th className="p-1.5 font-semibold text-center w-20">마진%</th>
-            <th className="p-1.5 font-semibold text-center w-13">단계</th>
-            {isEditable && <th className="p-1.5 font-semibold text-center w-12">관리</th>}
+            <th className="p-2 font-semibold text-center w-16">매출년</th>
+            <th className="p-2 font-semibold text-center w-14">매출월</th>
+            <th className="p-2 font-semibold text-center w-40">제품코드</th>
+            <th className="p-2 font-semibold text-center w-16">수량</th>
+            <th className="p-2 font-semibold text-center w-14">기간</th>
+            <th className="p-2 font-semibold text-center w-20">DC달러(%)</th>
+            <th className="p-2 font-semibold text-center w-24">달러PPC($)</th>
+            <th className="p-2 font-semibold text-center w-24">달러net($)</th>
+            <th className="p-2 font-semibold text-center w-20">환율(₩)</th>
+            <th className="p-2 font-semibold text-center w-28">원화PPC(₩)</th>
+            <th className="p-2 font-semibold text-center w-20">DC원화(%)</th>
+            <th className="p-2 font-semibold text-center w-28">공급가(₩)</th>
+            <th className="p-2 font-semibold text-center w-28">마진(₩)</th>
+            <th className="p-2 font-semibold text-center w-20">마진%</th>
+            <th className="p-2 font-semibold text-center w-18">단계</th>
+            {isEditable && <th className="p-2 font-semibold text-center w-14">관리</th>}
           </tr>
         </thead>
         <tbody>
@@ -68,10 +68,10 @@ export default function ProductTable({
                       type="number"
                       value={rawProd.년차}
                       onChange={(e) => onChangeProduct?.(idx, "년차", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center"
                     />
                   ) : (
-                    <div className="text-center px-1.5">
+                    <div className="text-center px-1.5 text-sm">
                       {calcProd.년차 !== undefined ? calcProd.년차 : calcProd.year}
                     </div>
                   )}
@@ -98,10 +98,10 @@ export default function ProductTable({
                           onChangeProduct?.(idx, "매출월", val);
                         }
                       }}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center"
                     />
                   ) : (
-                    <div className="text-center px-1.5">
+                    <div className="text-center px-1.5 text-sm">
                       {calcProd.매출월 !== undefined ? calcProd.매출월 : (calcProd.month || (new Date().getMonth() + 1))}
                     </div>
                   )}
@@ -113,7 +113,7 @@ export default function ProductTable({
                     <select
                       value={rawProd.제품코드}
                       onChange={(e) => onChangeProduct?.(idx, "제품코드", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm"
                     >
                       <option value="">제품 선택</option>
                       {filteredMaster.map((p: any) => (
@@ -124,7 +124,7 @@ export default function ProductTable({
                       ))}
                     </select>
                   ) : (
-                    <span className="px-1.5 block truncate" title={calcProd.제품코드}>
+                    <span className="px-1.5 block truncate text-sm" title={calcProd.제품코드}>
                       {calcProd.제품코드 || "-"}
                     </span>
                   )}
@@ -137,10 +137,10 @@ export default function ProductTable({
                       type="number"
                       value={rawProd.수량}
                       onChange={(e) => onChangeProduct?.(idx, "수량", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
                     />
                   ) : (
-                    <div className="text-right px-1.5">{calcProd.수량}</div>
+                    <div className="text-right px-1.5 text-sm">{calcProd.수량}</div>
                   )}
                 </td>
 
@@ -151,10 +151,10 @@ export default function ProductTable({
                       type="number"
                       value={rawProd.기간}
                       onChange={(e) => onChangeProduct?.(idx, "기간", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center"
                     />
                   ) : (
-                    <div className="text-center px-1.5">{calcProd.기간}</div>
+                    <div className="text-center px-1.5 text-sm">{calcProd.기간}</div>
                   )}
                 </td>
 
@@ -166,15 +166,15 @@ export default function ProductTable({
                       step="any"
                       value={rawProd.DC달러}
                       onChange={(e) => onChangeProduct?.(idx, "DC달러", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
                     />
                   ) : (
-                    <div className="text-right px-1.5">{calcProd.DC달러}%</div>
+                    <div className="text-right px-1.5 text-sm">{calcProd.DC달러}%</div>
                   )}
                 </td>
 
                 {/* 7. 달러PPC($) */}
-                <td className="p-1.5 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
+                <td className="p-1.5 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50 text-sm">
                   ${Number(calcProd.달러PPC || 0).toLocaleString(undefined, {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
@@ -182,12 +182,27 @@ export default function ProductTable({
                 </td>
 
                 {/* 8. 달러net($) */}
-                <td className="p-1.5 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50">
-                  ${Number(calcProd.달러net || 0).toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </td>
+                {isEditable && calcMode === "MANUAL" ? (
+                  <td className="p-1.5">
+                    <input
+                      type="number"
+                      step="any"
+                      value={rawProd.달러net !== undefined ? rawProd.달러net : (rawProd.netdollar !== undefined ? rawProd.netdollar : calcProd.달러net)}
+                      onChange={(e) => {
+                        onChangeProduct?.(idx, "달러net", e.target.value);
+                        onChangeProduct?.(idx, "netdollar", e.target.value);
+                      }}
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-medium"
+                    />
+                  </td>
+                ) : (
+                  <td className="p-1.5 text-right text-gray-500 bg-gray-50 dark:bg-gray-800/50 text-sm">
+                    ${Number(calcProd.달러net || 0).toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </td>
+                )}
 
                 {/* 9. 환율(₩) */}
                 <td className="p-1.5">
@@ -197,10 +212,10 @@ export default function ProductTable({
                       step="any"
                       value={rawProd.환율}
                       onChange={(e) => onChangeProduct?.(idx, "환율", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
                     />
                   ) : (
-                    <div className="text-right px-1.5">₩{Number(calcProd.환율 || 0).toLocaleString()}</div>
+                    <div className="text-right px-1.5 text-sm">₩{Number(calcProd.환율 || 0).toLocaleString()}</div>
                   )}
                 </td>
 
@@ -211,11 +226,11 @@ export default function ProductTable({
                       type="number"
                       value={rawProd.원화PPC !== undefined ? rawProd.원화PPC : calcProd.원화PPC}
                       onChange={(e) => onChangeProduct?.(idx, "원화PPC", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right font-medium"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-medium"
                     />
                   </td>
                 ) : (
-                  <td className="p-1.5 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
+                  <td className="p-1.5 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50 text-sm">
                     ₩{Number(calcProd.원화PPC || 0).toLocaleString()}
                   </td>
                 )}
@@ -228,22 +243,33 @@ export default function ProductTable({
                       step="any"
                       value={rawProd.DC원화}
                       onChange={(e) => onChangeProduct?.(idx, "DC원화", e.target.value)}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right"
                     />
                   </td>
                 ) : (
-                  <td className="p-1.5 text-right text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
+                  <td className="p-1.5 text-right text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50 text-sm">
                     {calcProd.DC원화}%
                   </td>
                 )}
 
                 {/* 12. 공급가(₩) */}
-                <td className="p-1.5 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50">
-                  ₩{Number(calcProd.공급가 || 0).toLocaleString()}
-                </td>
+                {isEditable && calcMode === "MANUAL" ? (
+                  <td className="p-1.5">
+                    <input
+                      type="number"
+                      value={rawProd.공급가 !== undefined ? rawProd.공급가 : (rawProd.supply_price !== undefined ? rawProd.supply_price : calcProd.공급가)}
+                      onChange={(e) => onChangeProduct?.(idx, "공급가", e.target.value)}
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-medium text-blue-600 dark:text-blue-400"
+                    />
+                  </td>
+                ) : (
+                  <td className="p-1.5 text-right font-medium text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-800/50 text-sm">
+                    ₩{Number(calcProd.공급가 || 0).toLocaleString()}
+                  </td>
+                )}
 
                 {/* 13. 마진(₩) */}
-                <td className="p-1.5 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/50">
+                <td className="p-1.5 text-right text-green-600 dark:text-green-400 bg-gray-50 dark:bg-gray-800/50 text-sm font-medium">
                   ₩{Math.round(Number(calcProd.마진 || 0)).toLocaleString()}
                 </td>
 
@@ -256,13 +282,13 @@ export default function ProductTable({
                         step="any"
                         value={rawProd.마진율 !== undefined ? rawProd.마진율 : calcProd.마진율}
                         onChange={(e) => onChangeProduct?.(idx, "마진율", e.target.value)}
-                        className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-right font-bold text-blue-600 dark:text-blue-400"
+                        className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-right font-bold text-blue-600 dark:text-blue-400"
                       />
-                      <span className="ml-1 text-blue-600 dark:text-blue-400 font-bold">%</span>
+                      <span className="ml-1 text-blue-600 dark:text-blue-400 font-bold text-sm">%</span>
                     </div>
                   </td>
                 ) : (
-                  <td className="p-1.5 text-right font-bold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/50">
+                  <td className="p-1.5 text-right font-bold text-blue-600 dark:text-blue-400 bg-gray-50 dark:bg-gray-800/50 text-sm">
                     {calcProd.마진율}%
                   </td>
                 )}
@@ -273,7 +299,7 @@ export default function ProductTable({
                     <select
                       value={rawProd.stage ?? "10"}
                       onChange={(e) => onChangeProduct?.(idx, "stage", Number(e.target.value))}
-                      className="w-full px-1.5 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="w-full px-1.5 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 dark:text-white text-sm text-center focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
                       {[0, 10, 25, 50, 75, 99, 100].map((val) => (
                         <option key={val} value={val}>
@@ -282,7 +308,7 @@ export default function ProductTable({
                       ))}
                     </select>
                   ) : (
-                    <div className="text-center px-1.5">
+                    <div className="text-center px-1.5 text-sm font-medium">
                       {calcProd.stage !== undefined && calcProd.stage !== null ? `${calcProd.stage}%` : "10%"}
                     </div>
                   )}
@@ -297,7 +323,7 @@ export default function ProductTable({
                       className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-7 h-7"
                       title="삭제"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </td>
                 )}

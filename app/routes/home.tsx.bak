@@ -2,7 +2,7 @@ import { useState, Fragment, useEffect, useRef } from "react";
 import { useFetcher, useSearchParams, Link } from "react-router";
 import crypto from "crypto";
 import { getFinalProducts, createEmptyProductRow, calculateReverseDCWon } from "~/utils/calculator";
-import { sendGasBatchRequest } from "~/utils/gasService";
+import { sendGasRequest, sendGasBatchRequest } from "~/utils/gasService";
 import ProductTable from "~/components/ProductTable";
 import type { Route } from "./+types/home";
 import db from "../db.server";
@@ -12,7 +12,12 @@ import {
     Calendar,
     Tag,
     Download,
+    Building2,
+    Users,
+    UserCircle,
+    ClipboardList,
     Package,
+    FileText,
     Plus,
     Save,
     Trash2,
@@ -23,12 +28,15 @@ import {
     ChevronUp,
     ChevronsUpDown,
     FileSpreadsheet,
-    Trophy,
 } from "lucide-react";
 
 export const handle = {
     breadcrumb: () => "홈페이지",
 };
+
+export const links: Route.LinksFunction = () => [
+    // 예: { rel: "stylesheet", href: "/styles/home-custom.css" }
+];
 
 export function headers({ loaderHeaders }: Route.HeadersArgs) {
     return {
@@ -36,6 +44,13 @@ export function headers({ loaderHeaders }: Route.HeadersArgs) {
         "Cache-Control": "no-cache, no-store, must-revalidate",
     };
 }
+
+// export function meta({}: Route.MetaArgs) {
+//     return [
+//         { title: "견적관리" },
+//         { name: "description", content: "McNal의 견적관리 프로젝트" },
+//     ];
+// }
 
 export async function action({ request }: Route.ActionArgs) {
     const data = await request.json();
@@ -52,16 +67,7 @@ export async function action({ request }: Route.ActionArgs) {
         defaultGroup,
         stage,
         syncToGas,
-        payment_condition,
-        billing_condition,
-        quote_number,
-        po_number,
     } = data;
-
-    const paymentConditionNum = payment_condition !== undefined && payment_condition !== null ? Number(payment_condition) : null;
-    const billingConditionNum = billing_condition !== undefined && billing_condition !== null ? Number(billing_condition) : null;
-    const quoteNumberStr = quote_number !== undefined && quote_number !== null ? String(quote_number) : null;
-    const poNumberStr = po_number !== undefined && po_number !== null ? String(po_number) : null;
 
     logger.info(`[Home Action] Received request: intent=${intent}, quoteId=${quoteId}`);
 
@@ -100,18 +106,13 @@ export async function action({ request }: Route.ActionArgs) {
         try {
             const targetQuoteId = Number(quoteId);
             const targetStage = Number(stage);
-            let targetIsOrdered = 0;
-            let targetIsLost = 0;
-            if (targetStage === 0) {
-                targetIsLost = 1;
-            } else if (targetStage === 99 || targetStage === 100) {
-                targetIsOrdered = 1;
-            }
+            const targetIsOrdered = Number(isOrdered) || 0;
+            const targetIsLost = Number(isLost) || 0;
 
             logger.info(`[Home Action] Updating stage for Quote ID: ${targetQuoteId} to ${targetStage}% (Ordered: ${targetIsOrdered}, Lost: ${targetIsLost})...`);
 
             // 1. 구글 시트 연동 상태 및 기존 디폴트 그룹의 라인 ID 리스트를 미리 조회합니다.
-            const currentQuote = db.prepare("SELECT sync_to_gas, project_code FROM quotes WHERE id = ?").get(targetQuoteId) as { sync_to_gas: number; project_code?: string } | undefined;
+            const currentQuote = db.prepare("SELECT sync_to_gas FROM quotes WHERE id = ?").get(targetQuoteId) as { sync_to_gas: number } | undefined;
             const priorSyncToGas = currentQuote ? currentQuote.sync_to_gas : 1;
 
             const defaultLines = db.prepare(`
@@ -121,86 +122,27 @@ export async function action({ request }: Route.ActionArgs) {
                 WHERE qg.quote_id = ? AND qg."default" = 1
             `).all(targetQuoteId) as Array<{ id: number }>;
 
-            // 2. DB 업데이트 수행
+            // 2. DB 업데이트 수행 (수식 정보 보존을 위해 오직 stage 및 상태 플래그만 단독 수정)
             db.transaction(() => {
                 db.prepare(`
                     UPDATE quotes 
-                    SET stage = ?, is_ordered = ?, is_lost = ?, updated_at = ?,
-                        payment_condition = COALESCE(?, payment_condition),
-                        billing_condition = COALESCE(?, billing_condition),
-                        quote_number = COALESCE(?, quote_number),
-                        po_number = COALESCE(?, po_number)
+                    SET stage = ?, is_ordered = ?, is_lost = ?, updated_at = ?
                     WHERE id = ?
-                `).run(targetStage, targetIsOrdered, targetIsLost, Date.now(), paymentConditionNum, billingConditionNum, quoteNumberStr, poNumberStr, targetQuoteId);
+                `).run(targetStage, targetIsOrdered, targetIsLost, Date.now(), targetQuoteId);
 
                 db.prepare(`
                     UPDATE quote_lines 
                     SET stage = ?
                     WHERE group_id IN (SELECT id FROM quote_groups WHERE quote_id = ?)
                 `).run(targetStage, targetQuoteId);
-
-                // 만약 모달에서 라인데이터 수동 수정사항(lines)이 함께 넘어온 경우
-                let parsedLines: any[] = [];
-                if (data.lines) {
-                    try {
-                        parsedLines = typeof data.lines === "string" ? JSON.parse(data.lines) : data.lines;
-                    } catch (e) {
-                        parsedLines = [];
-                    }
-                }
-
-                if (Array.isArray(parsedLines) && parsedLines.length > 0) {
-                    const updateLineStmt = db.prepare(`
-                        UPDATE quote_lines
-                        SET year = ?, month = ?, netdollar = ?, exchange_rate = ?, supply_price = ?, margin = ?, margin_rate = ?
-                        WHERE id = ?
-                    `);
-                    for (const l of parsedLines) {
-                        const lineId = Number(l.id);
-                        if (!lineId) continue;
-                        const yearNum = Number(l.년차 || l.year) || 1;
-                        const monthNum = Number(l.매출월 || l.month) || 1;
-                        const netdollarNum = Number(l.달러net || l.netdollar) || 0;
-                        const exRateNum = Number(l.환율 || l.exchange_rate) || 0;
-                        const supplyPriceNum = Number(l.공급가 || l.supply_price) || 0;
-                        const marginNum = supplyPriceNum - (netdollarNum * exRateNum);
-                        const marginRateNum = supplyPriceNum > 0 ? parseFloat(((marginNum / supplyPriceNum) * 100).toFixed(1)) : 0;
-
-                        updateLineStmt.run(yearNum, monthNum, netdollarNum, exRateNum, supplyPriceNum, marginNum, marginRateNum, lineId);
-                    }
-                }
             })();
 
             // 3. 구글 시트 동기화가 설정되어 있을 때만 일괄 송신
             if (priorSyncToGas === 1 && defaultLines.length > 0) {
-                let parsedLines: any[] = [];
-                if (data.lines) {
-                    try { parsedLines = typeof data.lines === "string" ? JSON.parse(data.lines) : data.lines; } catch (e) {}
-                }
-                const updateRows = defaultLines.map(line => {
-                    const matchedLine = Array.isArray(parsedLines) ? parsedLines.find((l: any) => Number(l.id) === line.id) : null;
-                    if (matchedLine) {
-                        const netdollarNum = Number(matchedLine.달러net || matchedLine.netdollar) || 0;
-                        const exRateNum = Number(matchedLine.환율 || matchedLine.exchange_rate) || 0;
-                        const supplyPriceNum = Number(matchedLine.공급가 || matchedLine.supply_price) || 0;
-                        const marginNum = supplyPriceNum - (netdollarNum * exRateNum);
-                        return {
-                            id: line.id,
-                            year: Number(matchedLine.년차 || matchedLine.year) || 1,
-                            month: Number(matchedLine.매출월 || matchedLine.month) || 1,
-                            stage: targetStage / 100,
-                            price: supplyPriceNum,
-                            margin: marginNum,
-                            netdollar: netdollarNum,
-                            projectCode: currentQuote?.project_code || ""
-                        };
-                    }
-                    return {
-                        id: line.id,
-                        stage: targetStage / 100, // 백분율 환산 (50% -> 0.5)
-                        projectCode: currentQuote?.project_code || ""
-                    };
-                });
+                const updateRows = defaultLines.map(line => ({
+                    id: line.id,
+                    stage: targetStage / 100 // 백분율 환산 (50% -> 0.5)
+                }));
                 await sendGasBatchRequest({ updateRows });
             }
 
@@ -212,7 +154,7 @@ export async function action({ request }: Route.ActionArgs) {
         }
     }
 
-    const quote_type = calcMode === "PPC" ? 0 : (calcMode === "DC" ? 1 : (calcMode === "MARGIN" ? 2 : 3));
+    const quote_type = calcMode === "PPC" ? 0 : 1;
     const now = Date.now();
 
     try {
@@ -319,11 +261,7 @@ export async function action({ request }: Route.ActionArgs) {
         db.transaction(() => {
             const stmt = db.prepare(`
                 UPDATE quotes 
-                SET quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?, products_history = ?, stage = ?, sync_to_gas = ?, gas_note = ?,
-                    payment_condition = COALESCE(?, payment_condition),
-                    billing_condition = COALESCE(?, billing_condition),
-                    quote_number = COALESCE(?, quote_number),
-                    po_number = COALESCE(?, po_number)
+                SET quote_type = ?, note = ?, project_name = ?, is_ordered = ?, is_lost = ?, updated_at = ?, products_history = ?, stage = ?, sync_to_gas = ?, gas_note = ?
                 WHERE id = ? AND updated_at = ?
             `);
             const info = stmt.run(
@@ -337,10 +275,6 @@ export async function action({ request }: Route.ActionArgs) {
                 stage !== undefined && stage !== null ? Number(stage) : 10,
                 nextSyncToGas,
                 gasNoteVal,
-                paymentConditionNum,
-                billingConditionNum,
-                quoteNumberStr,
-                poNumberStr,
                 quoteId,
                 originalUpdatedAt,
             );
@@ -362,8 +296,8 @@ export async function action({ request }: Route.ActionArgs) {
                     group_id, line_number, product_id, description, lpd, lpw, 
                     quantity, period, dc_usd, exchange_rate, dc_krw, 
                     supply_price, margin, margin_rate, year, krw_ppc,
-                    month, stage, usd_ppc, netdollar
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    month, stage
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `);
 
             const selectProduct = db.prepare("SELECT id FROM products WHERE code = ?");
@@ -383,23 +317,16 @@ export async function action({ request }: Route.ActionArgs) {
                     const productRow = selectProduct.get(productCode) as { id: number } | undefined;
                     const productId = productRow ? productRow.id : null;
 
-                    const lpdVal = Number(line.lpd) || 0;
-                    const qtyVal = Number(line.수량) || 1;
-                    const periodVal = Number(line.기간) || 1;
-                    const dcUsdVal = Number(line.DC달러) || 0;
-                    const usdPpcVal = Number(line.달러PPC !== undefined ? line.달러PPC : (lpdVal * (1 - dcUsdVal / 100))) || 0;
-                    const usdTotalVal = Number(line.달러net !== undefined ? line.달러net : (usdPpcVal * qtyVal * periodVal)) || 0;
-
                     const lineInfo = insertLine.run(
                         groupId,
                         index + 1,
                         productId,
                         line.제품설명 || "",
-                        lpdVal,
+                        Number(line.lpd) || 0,
                         Number(line.lpw) || 0,
-                        qtyVal,
-                        periodVal,
-                        dcUsdVal,
+                        Number(line.수량) || 1,
+                        Number(line.기간) || 1,
+                        Number(line.DC달러) || 0,
                         Number(line.환율) || 0,
                         Number(line.DC원화) || 0,
                         Number(line.공급가) || 0,
@@ -408,9 +335,7 @@ export async function action({ request }: Route.ActionArgs) {
                         Number(line.년차) || 1,
                         Number(line.원화PPC) || 0,
                         Number(line.매출월) || 1,
-                        line.stage !== undefined && line.stage !== null && line.stage !== "" ? Number(line.stage) : 10,
-                        usdPpcVal,
-                        usdTotalVal
+                        line.stage !== undefined && line.stage !== null && line.stage !== "" ? Number(line.stage) : 10
                     );
 
                     // 기본 그룹일 경우 구글 시트 동기화 대상에 수집
@@ -426,8 +351,7 @@ export async function action({ request }: Route.ActionArgs) {
                             lpd: Number(line.lpd) || 0,
                             수량: Number(line.수량) || 1,
                             기간: Number(line.기간) || 1,
-                            DC달러: Number(line.DC달러) || 0,
-                            netdollar: Number(line.달러net) || Number(line.netdollar) || 0
+                            DC달러: Number(line.DC달러) || 0
                         });
                     }
                 });
@@ -442,7 +366,7 @@ export async function action({ request }: Route.ActionArgs) {
         if (nextSyncToGas === 1 && defaultLinesToSync.length > 0) {
             // 수정 데이터에는 파트너/AM 정보가 동봉되지 않으므로 DB에서 기존 실시간 메타 정보를 조회합니다.
             const quoteMeta = db.prepare(`
-                SELECT client_company, partner_id, partner_contact_id, am_id, dist_contact_id, project_code
+                SELECT client_company, partner_id, partner_contact_id, am_id, dist_contact_id
                 FROM quotes
                 WHERE id = ?
             `).get(Number(quoteId)) as {
@@ -451,7 +375,6 @@ export async function action({ request }: Route.ActionArgs) {
                 partner_contact_id: number | null;
                 am_id: number | null;
                 dist_contact_id: number | null;
-                project_code: string | null;
             } | undefined;
 
             const vendorRows = db.prepare(`
@@ -465,8 +388,7 @@ export async function action({ request }: Route.ActionArgs) {
                 amId: quoteMeta?.am_id,
                 distContactId: quoteMeta?.dist_contact_id,
                 vendor: quoteVendorCombined,
-                clientCompany: quoteMeta?.client_company || "",
-                projectCode: quoteMeta?.project_code || ""
+                clientCompany: quoteMeta?.client_company || ""
             };
 
             const partnerName = db.prepare("SELECT name FROM partners WHERE id = ?").get(Number(basicInfo.partnerId))?.name || "";
@@ -475,6 +397,7 @@ export async function action({ request }: Route.ActionArgs) {
             const distName = db.prepare("SELECT name FROM dist_contacts WHERE id = ?").get(Number(basicInfo.distContactId))?.name || "";
 
             addRows = defaultLinesToSync.map((line) => {
+                const netdollar = line.lpd * line.수량 * line.기간 * (1 - line.DC달러 / 100);
                 return {
                     id: line.id,
                     year: line.년차,
@@ -485,12 +408,10 @@ export async function action({ request }: Route.ActionArgs) {
                     partner: partnerName,
                     contact: contactName,
                     account: basicInfo.clientCompany || "",
-                    projectCode: basicInfo.projectCode || "",
                     stage: line.stage,
                     price: line.공급가,
                     margin: line.마진,
-                    netdollar: line.netdollar,
-                    note: gasNoteVal
+                    netdollar: netdollar
                 };
             });
         }
@@ -572,9 +493,7 @@ function getAllQuoteProducts(quoteIds: number[]): Record<number, Record<string, 
             l.year as 년차,
             l.krw_ppc as 원화PPC,
             l.month as 매출월,
-            l.stage,
-            COALESCE(l.usd_ppc, (l.lpd * (1 - COALESCE(l.dc_usd, 0) / 100))) as 달러PPC,
-            COALESCE(l.netdollar, (COALESCE(l.usd_ppc, l.lpd * (1 - COALESCE(l.dc_usd, 0) / 100)) * l.quantity * l.period)) as 달러net
+            l.stage
         FROM quote_lines l
         LEFT JOIN products p ON l.product_id = p.id
         WHERE l.group_id IN (${groupPlaceholders})
@@ -636,44 +555,35 @@ export async function loader({ request }: Route.LoaderArgs) {
     addSearch("partner_contact_name", "pc.name");
     addSearch("project_name", "q.project_name");
     addSearch("dist_contact_name", "dc.name");
-    addSearch("am_name", "a.name");
 
-    // 1. 상태 필터 (통합: all | ordered | pending | lost) 기본값: 진행중(pending)
-    const status = url.searchParams.get("status") || "pending";
-    if (status === "ordered") {
-        conditions.push("q.is_ordered = 1");
-    } else if (status === "pending") {
-        conditions.push("q.is_ordered = 0 AND q.is_lost = 0");
-    } else if (status === "lost") {
-        conditions.push("q.is_lost = 1");
+    // 사이드바 추가 필터 (상태 및 날짜)
+    const isOrdered = url.searchParams.get("is_ordered") ?? "0";
+    if (isOrdered !== "all") {
+        conditions.push("q.is_ordered = ?");
+        params.push(parseInt(isOrdered, 10));
     }
 
-    // 2. 날짜 필터 (마지막 수정날짜 updated_at 기준, 시작년월 ~ 끝년월)
-    // 기본값: 한국시간(Asia/Seoul) 저번달 1일 ~ 현재달 말일
-    const nowKst = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
-    const curYearKst = nowKst.getFullYear();
-    const curMonthKst = nowKst.getMonth() + 1;
+    const isLost = url.searchParams.get("is_lost") ?? "0";
+    if (isLost !== "all") {
+        conditions.push("q.is_lost = ?");
+        params.push(parseInt(isLost, 10));
+    }
 
-    const prevDateKst = new Date(curYearKst, nowKst.getMonth() - 1, 1);
-    const defaultStartYear = prevDateKst.getFullYear();
-    const defaultStartMonth = prevDateKst.getMonth() + 1;
-    const defaultEndYear = curYearKst;
-    const defaultEndMonth = curMonthKst;
+    const createdYear = url.searchParams.get("created_year");
+    if (createdYear) {
+        conditions.push(
+            "STRFTIME('%Y', q.created_at / 1000, 'unixepoch', 'localtime') = ?",
+        );
+        params.push(createdYear);
+    }
 
-    const startYear = parseInt(url.searchParams.get("startYear") || String(defaultStartYear), 10);
-    const startMonth = parseInt(url.searchParams.get("startMonth") || String(defaultStartMonth), 10);
-    const endYear = parseInt(url.searchParams.get("endYear") || String(defaultEndYear), 10);
-    const endMonth = parseInt(url.searchParams.get("endMonth") || String(defaultEndMonth), 10);
-
-    const startDateObj = new Date(`${startYear}-${String(startMonth).padStart(2, "0")}-01T00:00:00+09:00`);
-    const startTimestamp = startDateObj.getTime();
-
-    const lastDayOfEndMonth = new Date(endYear, endMonth, 0).getDate();
-    const endDateObj = new Date(`${endYear}-${String(endMonth).padStart(2, "0")}-${String(lastDayOfEndMonth).padStart(2, "0")}T23:59:59.999+09:00`);
-    const endTimestamp = endDateObj.getTime();
-
-    conditions.push("q.updated_at >= ? AND q.updated_at <= ?");
-    params.push(startTimestamp, endTimestamp);
+    const createdMonth = url.searchParams.get("created_month");
+    if (createdMonth) {
+        conditions.push(
+            "STRFTIME('%m', q.created_at / 1000, 'unixepoch', 'localtime') = ?",
+        );
+        params.push(createdMonth.padStart(2, "0"));
+    }
 
     const vendor = url.searchParams.get("vendor");
     if (vendor === "none") {
@@ -709,10 +619,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         partner_company: "p.name",
         partner_contact_name: "pc.name",
         dist_contact_name: "dc.name",
-        am_name: "a.name",
         project_name: "q.project_name",
-        stage: "q.stage",
-        total_supply_price: "total_supply_price",
         created_at: "q.created_at",
         updated_at: "q.updated_at",
     };
@@ -723,8 +630,13 @@ export async function loader({ request }: Route.LoaderArgs) {
         SELECT 
             q.id,
             q.client_company,
+            q.client_contact_name,
+            q.client_contact_email,
+            q.client_contact_phone,
             p.name as partner_company,
             pc.name as partner_contact_name,
+            pc.email as partner_contact_email,
+            pc.phone as partner_contact_phone,
             dc.name as dist_contact_name,
             q.project_name,
             q.created_at,
@@ -733,15 +645,12 @@ export async function loader({ request }: Route.LoaderArgs) {
             q.note,
             q.gas_note,
             a.name as am_name,
+            q.deal_flow,
+            q.contract_type,
             q.quote_type,
             q.is_ordered,
             q.is_lost,
             q.sync_to_gas,
-            q.payment_condition,
-            q.billing_condition,
-            q.quote_number,
-            q.po_number,
-            q.project_code,
             (SELECT GROUP_CONCAT(vendor, ',') FROM quote_vendors WHERE quote_id = q.id) as vendor,
             (SELECT IFNULL(SUM(l.supply_price), 0)
              FROM quote_groups g
@@ -766,6 +675,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     // 화면에 보여주기 좋게 데이터를 가공합니다.
     const quotes = rawQuotes.map((row) => {
         let noteList = [];
+        let dealFlowList = [];
 
         // 배치로 조회된 제품 데이터 사용
         const productsObj = allProducts[row.id] || {};
@@ -777,28 +687,36 @@ export async function loader({ request }: Route.LoaderArgs) {
             console.error("비고 JSON 파싱 실패:", e);
         }
 
+        // deal_flow 데이터를 JSON 배열로 파싱합니다.
+        try {
+            dealFlowList = JSON.parse(row.deal_flow || "[]");
+        } catch (e) {
+            console.error("Deal flow JSON 파싱 실패:", e);
+        }
+
         return {
             id: row.id,
             client_company: row.client_company,
+            client_contact_name: row.client_contact_name,
+            client_contact_email: row.client_contact_email,
+            client_contact_phone: row.client_contact_phone,
             partner_company: row.partner_company,
             partner_contact_name: row.partner_contact_name,
+            partner_contact_email: row.partner_contact_email,
+            partner_contact_phone: row.partner_contact_phone,
             dist_contact_name: row.dist_contact_name,
             project_name: row.project_name,
             stage: row.stage,
             totalSupplyPrice: row.total_supply_price, // SQL에서 계산된 공급가
             productsList: productsObj, // 배치로 조회된 제품 목록
             noteList,
-            gas_note: row.gas_note,
             am_name: row.am_name,
+            dealFlowList,
+            contract_type: row.contract_type,
             quote_type: row.quote_type, // PPC(0) or DC/MARGIN(1)
             is_ordered: row.is_ordered,
             is_lost: row.is_lost,
             sync_to_gas: row.sync_to_gas,
-            payment_condition: row.payment_condition,
-            billing_condition: row.billing_condition,
-            quote_number: row.quote_number,
-            po_number: row.po_number,
-            project_code: row.project_code,
             vendor: row.vendor,
             created_at: row.created_at,
             createdAtDate: new Date(row.created_at).toLocaleDateString("ko-KR"),
@@ -817,19 +735,7 @@ export async function loader({ request }: Route.LoaderArgs) {
     const lastRateRow = db.prepare("SELECT rate FROM exchange_rate ORDER BY timestamp DESC LIMIT 1").get() as { rate: number } | undefined;
     const defaultExchangeRate = lastRateRow ? lastRateRow.rate : 0;
 
-    return {
-        quotes,
-        masterProducts,
-        pagination: { page, totalPages, total },
-        defaultExchangeRate,
-        filterDefaults: {
-            startYear,
-            startMonth,
-            endYear,
-            endMonth,
-            status,
-        },
-    };
+    return { quotes, masterProducts, pagination: { page, totalPages, total }, defaultExchangeRate };
 }
 
 interface GroupNameInputProps {
@@ -868,7 +774,7 @@ function GroupNameInput({ value, onRename }: GroupNameInputProps) {
 }
 
 export default function Home({ loaderData }: Route.ComponentProps) {
-    const { defaultExchangeRate, filterDefaults } = loaderData;
+    const { defaultExchangeRate } = loaderData;
     const fetcher = useFetcher();
     const [searchParams, setSearchParams] = useSearchParams();
 
@@ -878,7 +784,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
     // 편집 모드 상태 관리 (quoting.tsx 로직 통일)
     const [editingQuoteId, setEditingQuoteId] = useState<number | null>(null);
     const [editProducts, setEditProducts] = useState<Record<string, any[]>>({});
-    const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN" | "MANUAL">("DC");
+    const [calcMode, setCalcMode] = useState<"PPC" | "DC" | "MARGIN">("DC");
     const [editNotes, setEditNotes] = useState<string[]>([]);
     const [editProjectName, setEditProjectName] = useState<string>("");
     const [editIsOrdered, setEditIsOrdered] = useState<number>(0);
@@ -1053,103 +959,15 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         setEditSyncToGas(true);
     };
 
-    // 오더/수금완료 (99%/100%) 모달 상태 관리
-    const [orderConfirmModalData, setOrderConfirmModalData] = useState<{
-        quoteId: number;
-        targetStage: number;
-        paymentCondition: number; // 1: 일시납, 2: 분할납부
-        billingCondition: number; // 1: 일시납, 2: 분할납부(재견적), 3: 분할납부(환햇징)
-        quoteNumber: string;
-        poNumber: string;
-        lines: Array<{
-            id: number;
-            년차: number;
-            매출월: number;
-            제품코드: string;
-            달러net: number;
-            환율: number;
-            공급가: number;
-        }>;
-        isEditIntent?: boolean;
-        editPayload?: any;
-    } | null>(null);
-
-    const openOrderConfirmModal = (quote: any, targetStage: number, extraOptions?: { isEditIntent?: boolean; editPayload?: any }) => {
-        let productsObj: Record<string, any[]> = quote ? (quote.productsList || {}) : {};
-
-        // 현재 펼쳐진 행에서 편집 중인 상태(editProducts)일 경우
-        if ((!productsObj || Object.keys(productsObj).length === 0) && editProducts && Object.keys(editProducts).length > 0) {
-            productsObj = editProducts;
-        }
-
-        // products 배열 형태 호환 처리
-        if ((!productsObj || Object.keys(productsObj).length === 0) && quote && Array.isArray(quote.products)) {
-            const grouped: Record<string, any[]> = {};
-            quote.products.forEach((p: any) => {
-                const gName = p.group_name || "원가표1";
-                if (!grouped[gName]) grouped[gName] = [];
-                grouped[gName].push(p);
-            });
-            productsObj = grouped;
-        }
-
-        let defaultGroupProds: any[] = [];
-        for (const [gName, prods] of Object.entries(productsObj)) {
-            if (Array.isArray(prods) && prods.length > 0) {
-                if (prods[0].group_default === 1 || prods[0].default === 1) {
-                    defaultGroupProds = prods;
-                    break;
-                }
-            }
-        }
-        if (defaultGroupProds.length === 0 && Object.keys(productsObj).length > 0) {
-            const firstKey = Object.keys(productsObj)[0];
-            defaultGroupProds = productsObj[firstKey] || [];
-        }
-
-        const modalLines = defaultGroupProds.map((p: any) => ({
-            id: p.line_id !== undefined ? p.line_id : p.id,
-            년차: p.년차 !== undefined ? p.년차 : (p.year || 1),
-            매출월: p.매출월 !== undefined ? p.매출월 : (p.month || (new Date().getMonth() + 1)),
-            제품코드: p.제품코드 || p.code || "",
-            달러net: p.달러net !== undefined ? p.달러net : (p.netdollar || 0),
-            환율: p.환율 !== undefined ? p.환율 : (p.exchange_rate || defaultExchangeRate || 0),
-            공급가: p.공급가 !== undefined ? p.공급가 : (p.supply_price || 0),
-        }));
-
-        const initialPayment = quote ? (quote.payment_condition || 1) : 1;
-        const initialBilling = initialPayment === 1 ? 1 : (quote ? (quote.billing_condition || 1) : 1);
-
-        setOrderConfirmModalData({
-            quoteId: quote ? quote.id : (extraOptions?.editPayload?.quoteId || 0),
-            targetStage,
-            paymentCondition: initialPayment,
-            billingCondition: initialBilling,
-            quoteNumber: quote ? (quote.quote_number || "") : "",
-            poNumber: quote ? (quote.po_number || "") : "",
-            lines: modalLines,
-            isEditIntent: extraOptions?.isEditIntent,
-            editPayload: extraOptions?.editPayload,
-        });
-    };
-
     // 견적 리스트 단독 단계 변경 (드롭다운 빠른 수정)
-    const handleQuickStageChange = (quote: any, nextStage: number) => {
-        const currentStage = Number(quote.stage) || 0;
-
-        // 기존 단계가 99 미만이었던 견적이 99% 또는 100%로 새로 진입할 때만 모달 팝업
-        if (currentStage < 99 && (nextStage === 99 || nextStage === 100)) {
-            openOrderConfirmModal(quote, nextStage);
-            return;
-        }
-
-        const isOrdered = nextStage === 99 || nextStage === 100 ? 1 : 0;
+    const handleQuickStageChange = (quoteId: number, nextStage: number) => {
+        const isOrdered = (nextStage === 99 || nextStage === 100) ? 1 : 0;
         const isLost = nextStage === 0 ? 1 : 0;
 
         fetcher.submit(
             {
                 intent: "updateStage",
-                quoteId: quote.id,
+                quoteId,
                 stage: nextStage,
                 isOrdered,
                 isLost
@@ -1162,25 +980,30 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
     // 견적 수정 저장
     const handleSaveEdit = (quoteId: number) => {
-        // [오더 / 실주 상태에 따른 단계 정밀 동기화]
-        const targetStage = editStage;
-        const targetIsOrdered = (targetStage === 99 || targetStage === 100) ? 1 : 0;
-        const targetIsLost = targetStage === 0 ? 1 : 0;
+        // [오더 / 실주 상태에 따른 단계 자동 일관성 보정]
+        let targetStage = editStage;
+        if (editIsOrdered === 1) {
+            targetStage = editStage === 100 ? 100 : 99;
+        } else if (editIsLost === 1) {
+            targetStage = 0;
+        }
 
         // editStage 상태 동기화 및 제품 라인 일괄 단계 보정
         let updatedProducts = { ...editProducts };
-        const newEditProducts = {};
-        for (const [groupName, prods] of Object.entries(editProducts)) {
-            if (Array.isArray(prods)) {
-                newEditProducts[groupName] = prods.map((p) => ({
-                    ...p,
-                    stage: targetStage,
-                }));
-            } else {
-                newEditProducts[groupName] = prods;
+        if (editIsOrdered === 1 || editIsLost === 1) {
+            const newEditProducts = {};
+            for (const [groupName, prods] of Object.entries(editProducts)) {
+                if (Array.isArray(prods)) {
+                    newEditProducts[groupName] = prods.map((p) => ({
+                        ...p,
+                        stage: targetStage,
+                    }));
+                } else {
+                    newEditProducts[groupName] = prods;
+                }
             }
+            updatedProducts = newEditProducts;
         }
-        updatedProducts = newEditProducts;
 
         // [적합성 검사]
         if (!editProjectName.trim()) {
@@ -1239,35 +1062,21 @@ export default function Home({ loaderData }: Route.ComponentProps) {
             .map((n) => n.trim())
             .filter((n) => n !== "");
 
-        const editPayload = {
-            intent: "edit",
-            quoteId,
-            products: finalProducts,
-            calcMode,
-            notes: finalEditNotes,
-            projectName: editProjectName,
-            isOrdered: targetIsOrdered,
-            isLost: targetIsLost,
-            stage: targetStage,
-            originalUpdatedAt: editOriginalUpdatedAt,
-            defaultGroup: editDefaultGroup,
-            syncToGas: editSyncToGas,
-        };
-
-        const currentQuote = loaderData.quotes.find((q: any) => q.id === quoteId);
-        const currentStage = Number(currentQuote?.stage) || 0;
-
-        // 기존 단계가 99 미만이었던 견적이 99% 또는 100%로 새로 진입할 때만 모달 팝업
-        if (currentStage < 99 && (targetStage === 99 || targetStage === 100)) {
-            openOrderConfirmModal(currentQuote, targetStage, {
-                isEditIntent: true,
-                editPayload,
-            });
-            return;
-        }
-
         fetcher.submit(
-            editPayload,
+            {
+                intent: "edit",
+                quoteId,
+                products: finalProducts,
+                calcMode,
+                notes: finalEditNotes,
+                projectName: editProjectName,
+                isOrdered: editIsOrdered,
+                isLost: editIsLost,
+                stage: targetStage,
+                originalUpdatedAt: editOriginalUpdatedAt,
+                defaultGroup: editDefaultGroup,
+                syncToGas: editSyncToGas,
+            },
             { method: "post", encType: "application/json" },
         );
     };
@@ -1292,7 +1101,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         }
     };
 
-
+    // 비고 수정 핸들러
+    const handleAddNote = () => setEditNotes((prev) => [...prev, ""]);
+    const handleRemoveNote = (index: number) =>
+        setEditNotes((prev) => prev.filter((_, i) => i !== index));
+    const handleNoteChange = (index: number, value: string) => {
+        setEditNotes((prev) => {
+            const newNotes = [...prev];
+            newNotes[index] = value;
+            return newNotes;
+        });
+    };
 
     // 그룹 이름 수정 핸들러
     const handleRenameGroup = (oldName: string, newName: string) => {
@@ -1505,7 +1324,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
     // quoting.tsx와 동일한 계산 기준(calcMode) 변경 핸들러
     const handleCalcModeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newMode = e.target.value as "PPC" | "DC" | "MARGIN" | "MANUAL";
+        const newMode = e.target.value as "PPC" | "DC" | "MARGIN";
         setEditProducts((prev) => getFinalProducts(prev, calcMode));
         setCalcMode(newMode);
     };
@@ -1543,36 +1362,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
         }
 
         const blob = await response.blob();
-
-        // 1. File System Access API (showSaveFilePicker) 지원 브라우저인 경우 '다른 이름으로 저장 창' 노출
-        if ("showSaveFilePicker" in window) {
-            try {
-                const handle = await (window as any).showSaveFilePicker({
-                    suggestedName: filename,
-                    types: [
-                        {
-                            description: "Excel Spreadsheet",
-                            accept: {
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
-                            },
-                        },
-                    ],
-                });
-                const writable = await handle.createWritable();
-                await writable.write(blob);
-                await writable.close();
-                return;
-            } catch (err: any) {
-                // 사용자가 창에서 '취소'를 누른 경우 예외 처리
-                if (err.name === "AbortError") {
-                    console.log(`[Save Canceled] User canceled saving ${filename}`);
-                    return;
-                }
-                console.warn(`[Save Picker Warning] ${err.message}. Falling back to normal download.`);
-            }
-        }
-
-        // 2. 미지원 브라우저 또는 Fallback 기본 다운로드 방식
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -1621,23 +1410,22 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
             const finalGroupedProducts = getFinalProducts(grouped, quote.quote_type === 0 ? "PPC" : "DC");
 
-            // 1번째 원가표.xlsx 저장 대화창 노출
-            await downloadFile(
-                "cost",
-                `${prefix}-원가표.xlsx`,
-                finalGroupedProducts,
-                quote,
-                currentProjectName,
-            );
-
-            // 2번째 견적서.xlsx 저장 대화창 노출
-            await downloadFile(
-                "quote",
-                `${prefix}-견적서.xlsx`,
-                finalGroupedProducts,
-                quote,
-                currentProjectName,
-            );
+            await Promise.all([
+                downloadFile(
+                    "cost",
+                    `${prefix}-원가표.xlsx`,
+                    finalGroupedProducts,
+                    quote,
+                    currentProjectName,
+                ),
+                downloadFile(
+                    "quote",
+                    `${prefix}-견적서.xlsx`,
+                    finalGroupedProducts,
+                    quote,
+                    currentProjectName,
+                ),
+            ]);
         } catch (error) {
             console.error(error);
             alert("엑셀 다운로드 중 오류가 발생했습니다.");
@@ -1715,72 +1503,68 @@ export default function Home({ loaderData }: Route.ComponentProps) {
 
             {/* 상단 필터 영역 (사이드바 대체) */}
             <div className="mb-6 bg-white dark:bg-gray-800 p-4 rounded-lg shadow border border-gray-200 dark:border-gray-700 flex flex-wrap items-center gap-6">
-                {/* 1. 상태 필터 (통합: 오더완료, 진행중, 실주) */}
                 <div className="flex items-center gap-3">
                     <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
-                        <Search className="w-4 h-4 mr-1.5 text-gray-500" /> 상태 필터
+                        <Search className="w-4 h-4 mr-1.5 text-gray-500" /> 상태
+                        필터
                     </span>
                     <select
                         className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
-                        value={searchParams.get("status") || "pending"}
+                        value={searchParams.get("is_ordered") ?? "0"}
                         onChange={(e) =>
-                            handleFilterChange("status", e.target.value)
+                            handleFilterChange("is_ordered", e.target.value)
                         }
                     >
-                        <option value="all">전체 상태</option>
-                        <option value="ordered">오더완료</option>
-                        <option value="pending">진행중</option>
-                        <option value="lost">실주</option>
+                        <option value="all">오더 전체</option>
+                        <option value="1">오더 완료</option>
+                        <option value="0">미오더</option>
+                    </select>
+                    <select
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
+                        value={searchParams.get("is_lost") ?? "0"}
+                        onChange={(e) =>
+                            handleFilterChange("is_lost", e.target.value)
+                        }
+                    >
+                        <option value="all">실주 전체</option>
+                        <option value="1">실주</option>
+                        <option value="0">진행중</option>
                     </select>
                 </div>
 
                 <div className="w-px h-5 bg-gray-300 dark:bg-gray-600 hidden sm:block"></div>
 
-                {/* 2. 수정날짜 필터 (시작년/월 ~ 끝년/월 범위 검색) */}
-                <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center mr-1">
-                        <Calendar className="w-4 h-4 mr-1.5 text-gray-500" /> 수정날짜 필터
+                <div className="flex items-center gap-3">
+                    <span className="font-bold text-gray-800 dark:text-gray-200 text-sm flex items-center">
+                        <Calendar className="w-4 h-4 mr-1.5 text-gray-500" />{" "}
+                        견적날짜 필터
                     </span>
-
-                    {/* 시작 년/월 */}
                     <select
-                        className="px-2.5 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={searchParams.get("startYear") || String(filterDefaults?.startYear || new Date().getFullYear())}
-                        onChange={(e) => handleFilterChange("startYear", e.target.value)}
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
+                        value={searchParams.get("created_year") || ""}
+                        onChange={(e) =>
+                            handleFilterChange("created_year", e.target.value)
+                        }
                     >
-                        {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - 3 + i).map((y) => (
-                            <option key={y} value={y}>{y}년</option>
+                        <option value="">연도 전체</option>
+                        {years.map((y) => (
+                            <option key={y} value={y}>
+                                {y}년
+                            </option>
                         ))}
                     </select>
                     <select
-                        className="px-2.5 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={searchParams.get("startMonth") || String(filterDefaults?.startMonth || 1)}
-                        onChange={(e) => handleFilterChange("startMonth", e.target.value)}
+                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 dark:focus:ring-offset-gray-800 transition-shadow"
+                        value={searchParams.get("created_month") || ""}
+                        onChange={(e) =>
+                            handleFilterChange("created_month", e.target.value)
+                        }
                     >
-                        {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                            <option key={m} value={m}>{m}월</option>
-                        ))}
-                    </select>
-
-                    <span className="text-gray-400 font-bold text-xs px-0.5">~</span>
-
-                    {/* 끝 년/월 */}
-                    <select
-                        className="px-2.5 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={searchParams.get("endYear") || String(filterDefaults?.endYear || new Date().getFullYear())}
-                        onChange={(e) => handleFilterChange("endYear", e.target.value)}
-                    >
-                        {Array.from({ length: 7 }, (_, i) => new Date().getFullYear() - 3 + i).map((y) => (
-                            <option key={y} value={y}>{y}년</option>
-                        ))}
-                    </select>
-                    <select
-                        className="px-2.5 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 dark:text-white text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        value={searchParams.get("endMonth") || String(filterDefaults?.endMonth || 12)}
-                        onChange={(e) => handleFilterChange("endMonth", e.target.value)}
-                    >
-                        {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                            <option key={m} value={m}>{m}월</option>
+                        <option value="">월 전체</option>
+                        {months.map((m) => (
+                            <option key={m} value={m}>
+                                {m}월
+                            </option>
                         ))}
                     </select>
                 </div>
@@ -1832,9 +1616,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                 {renderTh("고객사", "client_company", {
                                     className: "w-[12%]",
                                 })}
-                                {renderTh("사업명", "project_name", {
-                                    className: "w-[20%]",
-                                })}
                                 {renderTh("파트너사", "partner_company", {
                                     className: "w-[12%]",
                                 })}
@@ -1844,20 +1625,23 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                 {renderTh("총판", "dist_contact_name", {
                                     className: "w-[8%]",
                                 })}
-                                {renderTh("AM", "am_name", {
-                                    className: "w-[9%]",
-                                    sortable: true,
-                                    searchable: true,
+                                {renderTh("사업명", "project_name", {
+                                    className: "w-[20%]",
                                 })}
                                 {renderTh("단계", "stage", {
-                                    sortable: true,
+                                    sortable: false,
                                     searchable: false,
                                     className: "w-[6%] whitespace-nowrap",
                                 })}
-                                {renderTh("총 공급가", "total_supply_price", {
+                                {renderTh("총 공급가", "totalSupplyPrice", {
+                                    sortable: false,
+                                    searchable: false,
+                                    className: "w-[10%] whitespace-nowrap",
+                                })}
+                                {renderTh("견적날짜", "created_at", {
                                     sortable: true,
                                     searchable: false,
-                                    className: "w-[11%] whitespace-nowrap",
+                                    className: "w-[10%] whitespace-nowrap",
                                 })}
                                 {renderTh("마지막 수정날짜", "updated_at", {
                                     sortable: true,
@@ -1876,25 +1660,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                         <td className="p-4 truncate" title={quote.client_company}>
                                             {quote.client_company}
                                         </td>
-                                        <td className="p-4 truncate" title={quote.project_name}>
-                                            <div className="flex items-center gap-2">
-                                                {quote.sync_to_gas !== 0 ? (
-                                                    <FileSpreadsheet
-                                                        className="w-4 h-4 flex-shrink-0"
-                                                        color="#10b981"
-                                                        fill="#10b981"
-                                                        fillOpacity={0.15}
-                                                        title="구글 스프레드시트 연동 중"
-                                                    />
-                                                ) : (
-                                                    <FileSpreadsheet
-                                                        className="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0"
-                                                        title="구글 스프레드시트 연동 해제됨"
-                                                    />
-                                                )}
-                                                <span className="truncate">{quote.project_name}</span>
-                                            </div>
-                                        </td>
                                         <td className="p-4 truncate" title={quote.partner_company}>
                                             {quote.partner_company}
                                         </td>
@@ -1904,8 +1669,24 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                         <td className="p-4 truncate" title={quote.dist_contact_name}>
                                             {quote.dist_contact_name}
                                         </td>
-                                        <td className="p-4 truncate" title={quote.am_name}>
-                                            {quote.am_name}
+                                        <td className="p-4 truncate" title={quote.project_name}>
+                                            <div className="flex items-center gap-2">
+                                                {quote.sync_to_gas !== 0 ? (
+                                                    <FileSpreadsheet 
+                                                        className="w-4 h-4 flex-shrink-0" 
+                                                        color="#10b981" 
+                                                        fill="#10b981" 
+                                                        fillOpacity={0.15}
+                                                        title="구글 스프레드시트 연동 중" 
+                                                    />
+                                                ) : (
+                                                    <FileSpreadsheet 
+                                                        className="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0" 
+                                                        title="구글 스프레드시트 연동 해제됨" 
+                                                    />
+                                                )}
+                                                <span className="truncate">{quote.project_name}</span>
+                                            </div>
                                         </td>
                                         <td className="p-4 truncate">
                                             {quote.stage !== undefined && quote.stage !== null ? `${quote.stage}%` : "-"}
@@ -1914,59 +1695,134 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                             {quote.totalSupplyPrice.toLocaleString()}원
                                         </td>
                                         <td className="p-4 truncate">
+                                            {quote.createdAtDate}
+                                        </td>
+                                        <td className="p-4 truncate">
                                             {quote.updatedAtDate}
                                         </td>
                                     </tr>
                                     {/* 펼쳐진 영역 상세 내용 */}
                                     {expandedRows.has(quote.id) && (
-                                        <tr className="no-hover bg-blue-50/70 dark:bg-blue-950/40 border-y border-blue-200 dark:border-blue-800/60 shadow-inner">
+                                        <tr className="no-hover bg-slate-50/50 dark:bg-slate-900/30 border-y border-gray-200 dark:border-gray-700 shadow-inner">
                                             <td colSpan={9} className="p-6">
                                                 <div className="space-y-6">
-                                                    {/* 1. 견적 상세 헤더 및 테이블 */}
-                                                    <div className="space-y-6">
-                                                        <div className="bg-white/95 dark:bg-gray-800/95 p-5 rounded-lg border border-blue-100 dark:border-blue-900/50 shadow-sm">
-                                                            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-                                                                <div className="flex items-center gap-4 flex-wrap">
-                                                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg whitespace-nowrap">
-                                                                        <Package className="w-5 h-5 mr-2 text-gray-500" />
-                                                                        견적 상세
-                                                                    </h3>
-
-                                                                    {/* 대표비고 표시/입력 */}
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">대표비고:</span>
-                                                                        {editingQuoteId === quote.id ? (
+                                                    {/* 0. 담당자 및 영업 요약 정보 */}
+                                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                                        <div>
+                                                            <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
+                                                                <Building2 className="w-4 h-4 mr-2 text-gray-500" />
+                                                                고객사 담당자
+                                                            </h4>
+                                                            <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+                                                                <p>
+                                                                    이름:{" "}
+                                                                    {quote.client_contact_name ||
+                                                                        ""}
+                                                                </p>
+                                                                <p>
+                                                                    이메일:{" "}
+                                                                    {quote.client_contact_email ||
+                                                                        ""}
+                                                                </p>
+                                                                <p>
+                                                                    연락처:{" "}
+                                                                    {quote.client_contact_phone ||
+                                                                        ""}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
+                                                                <Users className="w-4 h-4 mr-2 text-gray-500" />
+                                                                파트너사 담당자
+                                                            </h4>
+                                                            <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+                                                                <p>
+                                                                    이름:{" "}
+                                                                    {quote.partner_contact_name ||
+                                                                        ""}
+                                                                </p>
+                                                                <p>
+                                                                    이메일:{" "}
+                                                                    {quote.partner_contact_email ||
+                                                                        ""}
+                                                                </p>
+                                                                <p>
+                                                                    연락처:{" "}
+                                                                    {quote.partner_contact_phone ||
+                                                                        ""}
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
+                                                                <UserCircle className="w-4 h-4 mr-2 text-gray-500" />
+                                                                영업 정보
+                                                            </h4>
+                                                            <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+                                                                <p>
+                                                                    총판 담당자:{" "}
+                                                                    {quote.dist_contact_name ||
+                                                                        ""}
+                                                                </p>
+                                                                <p>
+                                                                    AM 이름:{" "}
+                                                                    {quote.am_name ||
+                                                                        ""}
+                                                                </p>
+                                                                <p>
+                                                                    계약방식:{" "}
+                                                                    {quote.contract_type ||
+                                                                        ""}
+                                                                </p>
+                                                                <p className="flex flex-wrap gap-1">
+                                                                    Deal Flow:{" "}
+                                                                    <span className="text-blue-600 dark:text-blue-400 font-medium break-all">
+                                                                        {quote.dealFlowList?.join(
+                                                                            " ➔ ",
+                                                                        ) || ""}
+                                                                    </span>
+                                                                </p>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-3 flex items-center">
+                                                                <ClipboardList className="w-4 h-4 mr-2 text-gray-500" />
+                                                                사업 정보
+                                                            </h4>
+                                                            <div className="text-sm text-gray-600 dark:text-gray-400 space-y-2">
+                                                                {editingQuoteId ===
+                                                                    quote.id ? (
+                                                                    <>
+                                                                        <div className="flex flex-col gap-1">
+                                                                            <label className="text-xs font-medium text-gray-500">
+                                                                                사업명
+                                                                            </label>
                                                                             <input
                                                                                 type="text"
-                                                                                value={editNotes[0] || ""}
-                                                                                onChange={(e) => {
-                                                                                    const val = e.target.value;
-                                                                                    setEditNotes((prev) => {
-                                                                                        const next = [...prev];
-                                                                                        if (next.length === 0) return [val];
-                                                                                        next[0] = val;
-                                                                                        return next;
-                                                                                    });
-                                                                                }}
-                                                                                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-[300px] md:w-[380px]"
-                                                                                placeholder="대표 비고를 입력하세요"
+                                                                                value={
+                                                                                    editProjectName
+                                                                                }
+                                                                                onChange={(
+                                                                                    e,
+                                                                                ) =>
+                                                                                    setEditProjectName(
+                                                                                        e
+                                                                                            .target
+                                                                                            .value,
+                                                                                    )
+                                                                                }
+                                                                                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
                                                                             />
-                                                                        ) : (
-                                                                            <span className="text-sm text-gray-700 dark:text-gray-300 font-medium px-3 py-1.5 bg-gray-50 dark:bg-gray-700/60 rounded border border-gray-200 dark:border-gray-600 inline-block min-w-[380px] md:min-w-[460px] truncate" title={quote.gas_note || (quote.noteList && quote.noteList[0]) || ""}>
-                                                                                {quote.gas_note || (quote.noteList && quote.noteList[0]) || "-"}
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-
-                                                                    {/* 단계 선택/변경 */}
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">단계:</span>
-                                                                        <select
-                                                                            value={editingQuoteId === quote.id ? editStage : (quote.stage ?? 10)}
-                                                                            disabled={fetcher.state === "submitting"}
-                                                                            onChange={(e) => {
-                                                                                const newVal = Number(e.target.value);
-                                                                                if (editingQuoteId === quote.id) {
+                                                                        </div>
+                                                                        <div className="flex flex-col gap-1 mt-1">
+                                                                            <label className="text-xs font-medium text-gray-500">
+                                                                                단계 (%)
+                                                                            </label>
+                                                                            <select
+                                                                                value={editStage}
+                                                                                onChange={(e) => {
+                                                                                    const newVal = Number(e.target.value);
                                                                                     const prevVal = editStage;
                                                                                     setEditStage(newVal);
                                                                                     const success = updateAllProductsStage(newVal);
@@ -1981,21 +1837,130 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                             setEditIsOrdered(0);
                                                                                         }
                                                                                     }
-                                                                                } else {
-                                                                                    handleQuickStageChange(quote, newVal);
-                                                                                }
-                                                                            }}
-                                                                            className="bg-white border border-gray-300 text-gray-900 text-sm rounded-md focus:ring-blue-500 focus:border-blue-500 block px-2.5 py-1.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 cursor-pointer disabled:opacity-50 font-semibold"
-                                                                        >
-                                                                            {[0, 10, 25, 50, 75, 99, 100].map((val) => (
-                                                                                <option key={val} value={val}>
-                                                                                    {val}%
-                                                                                </option>
-                                                                            ))}
-                                                                        </select>
-                                                                    </div>
-                                                                </div>
+                                                                                }}
+                                                                                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow"
+                                                                            >
+                                                                                {[0, 10, 25, 50, 75, 99, 100].map((val) => (
+                                                                                    <option key={val} value={val}>
+                                                                                        {val}%
+                                                                                    </option>
+                                                                                ))}
+                                                                            </select>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-4 mt-2">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <label className="text-xs font-medium text-gray-500">
+                                                                                    오더여부
+                                                                                </label>
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={
+                                                                                        editIsOrdered === 1
+                                                                                    }
+                                                                                    onChange={(e) => {
+                                                                                        const checked = e.target.checked;
+                                                                                        setEditIsOrdered(checked ? 1 : 0);
+                                                                                        if (checked) {
+                                                                                            setEditIsLost(0);
+                                                                                            const nextStageVal = editStage === 100 ? 100 : 99;
+                                                                                            setEditStage(nextStageVal);
+                                                                                            updateAllProductsStage(nextStageVal);
+                                                                                        }
+                                                                                    }}
+                                                                                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
+                                                                                />
+                                                                            </div>
+                                                                            <div className="flex items-center gap-2">
+                                                                                <label className="text-xs font-medium text-gray-500">
+                                                                                    실주여부
+                                                                                </label>
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={
+                                                                                        editIsLost === 1
+                                                                                    }
+                                                                                    onChange={(e) => {
+                                                                                        const checked = e.target.checked;
+                                                                                        setEditIsLost(checked ? 1 : 0);
+                                                                                        if (checked) {
+                                                                                            setEditIsOrdered(0);
+                                                                                            setEditStage(0);
+                                                                                            updateAllProductsStage(0);
+                                                                                        }
+                                                                                    }}
+                                                                                    className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 dark:border-gray-600 dark:bg-gray-700 transition-colors"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <p>
+                                                                            사업명:{" "}
+                                                                            {quote.project_name ||
+                                                                                ""}
+                                                                        </p>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">단계:</span>
+                                                                            <select
+                                                                                value={quote.stage ?? 10}
+                                                                                disabled={fetcher.state === "submitting"}
+                                                                                onChange={(e) => handleQuickStageChange(quote.id, Number(e.target.value))}
+                                                                                className="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-0.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-blue-500 dark:focus:border-blue-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                                                                            >
+                                                                                <option value="10">10%</option>
+                                                                                <option value="25">25%</option>
+                                                                                <option value="50">50%</option>
+                                                                                <option value="75">75%</option>
+                                                                                <option value="99">99%</option>
+                                                                                <option value="100">100%</option>
+                                                                                <option value="0">0%</option>
+                                                                            </select>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-4 mt-1">
+                                                                            <div className="flex items-center gap-2">
+                                                                                <span>
+                                                                                    오더여부:
+                                                                                </span>
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={
+                                                                                        quote.is_ordered ===
+                                                                                        1
+                                                                                    }
+                                                                                    readOnly
+                                                                                    className="w-4 h-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 cursor-not-allowed"
+                                                                                />
+                                                                            </div>
+                                                                            <div className="flex items-center gap-2">
+                                                                                <span>
+                                                                                    실주여부:
+                                                                                </span>
+                                                                                <input
+                                                                                    type="checkbox"
+                                                                                    checked={
+                                                                                        quote.is_lost ===
+                                                                                        1
+                                                                                    }
+                                                                                    readOnly
+                                                                                    className="w-4 h-4 text-red-600 rounded border-gray-300 dark:border-gray-600 dark:bg-gray-700 cursor-not-allowed"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                    </>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
 
+                                                    {/* 1. 제품 상세 테이블 */}
+                                                    <div className="space-y-6">
+                                                        <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                                            <div className="flex justify-between items-center">
+                                                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
+                                                                    <Package className="w-5 h-5 mr-2 text-gray-500" />
+                                                                    제품 상세 목록 설정
+                                                                </h3>
                                                                 <div className="flex items-center gap-4">
                                                                     {editingQuoteId === quote.id ? (
                                                                         <>
@@ -2036,17 +2001,6 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                     />
                                                                                     <span className="text-sm text-gray-700 dark:text-gray-300">마진</span>
                                                                                 </label>
-                                                                                <label className="flex items-center gap-1.5 cursor-pointer px-1">
-                                                                                    <input
-                                                                                        type="radio"
-                                                                                        name={`calcMode-${quote.id}`}
-                                                                                        value="MANUAL"
-                                                                                        checked={calcMode === "MANUAL"}
-                                                                                        onChange={handleCalcModeChange}
-                                                                                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                                                                    />
-                                                                                    <span className="text-sm text-blue-600 dark:text-blue-400 font-semibold">수동</span>
-                                                                                </label>
                                                                             </div>
                                                                             <button
                                                                                 type="button"
@@ -2085,11 +2039,9 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         <div className="flex gap-2">
                                                                             <Link
                                                                                 to={`/history/${quote.id}`}
-                                                                                target="_blank"
-                                                                                rel="noopener noreferrer"
                                                                                 className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-blue-600 hover:bg-blue-50 dark:bg-gray-800 dark:text-blue-400 dark:hover:bg-gray-700 border border-gray-300 dark:border-gray-600 h-8 px-3 shadow-sm"
                                                                             >
-                                                                                상세보기
+                                                                                기록보기
                                                                             </Link>
                                                                             <button
                                                                                 type="button"
@@ -2112,40 +2064,25 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                     : quote.productsList)
                                                         ).map(([groupName, groupProducts]) => {
                                                             const isEditing = editingQuoteId === quote.id;
-                                                            // 수정 모드일 때만 getFinalProducts로 실시간 재계산, 조회 모드에서는 DB에 동기화된 원본 값을 그대로 보존하여 표시
-                                                            const finalProds = isEditing
-                                                                ? (getFinalProducts(groupProducts as any[], calcMode) as any[])
-                                                                : (groupProducts as any[]).map((p: any) => ({
-                                                                    ...p,
-                                                                    공급가: p.공급가 !== undefined ? p.공급가 : (p.supply_price !== undefined ? p.supply_price : 0),
-                                                                    마진: p.마진 !== undefined ? p.마진 : (p.margin !== undefined ? p.margin : 0),
-                                                                    마진율: p.마진율 !== undefined ? String(p.마진율) : (p.margin_rate !== undefined ? String(p.margin_rate) : (p.supply_price ? ((p.margin / p.supply_price) * 100).toFixed(1) : "0.0")),
-                                                                    DC원화: p.DC원화 !== undefined ? p.DC원화 : (p.dc_krw !== undefined ? p.dc_krw : 0),
-                                                                    DC달러: p.DC달러 !== undefined ? p.DC달러 : (p.dc_usd !== undefined ? p.dc_usd : 0),
-                                                                    달러PPC: p.달러PPC !== undefined ? p.달러PPC : (p.usd_ppc !== undefined ? p.usd_ppc : (Number(p.lpd || 0) * (1 - Number(p.DC달러 || 0) / 100))),
-                                                                    달러net: p.달러net !== undefined ? p.달러net : (p.netdollar !== undefined ? p.netdollar : (Number(p.달러PPC !== undefined ? p.달러PPC : (Number(p.lpd || 0) * (1 - Number(p.DC달러 || 0) / 100))) * Number(p.수량 !== undefined ? p.수량 : (p.quantity !== undefined ? p.quantity : 1)) * Number(p.기간 !== undefined ? p.기간 : (p.period !== undefined ? p.period : 1)))),
-                                                                    lpd: p.lpd !== undefined ? p.lpd : 0,
-                                                                    lpw: p.lpw !== undefined ? p.lpw : 0,
-                                                                    수량: p.수량 !== undefined ? p.수량 : (p.quantity !== undefined ? p.quantity : 1),
-                                                                    기간: p.기간 !== undefined ? p.기간 : (p.period !== undefined ? p.period : 1),
-                                                                    년차: p.년차 !== undefined ? p.년차 : (p.year !== undefined ? p.year : 1),
-                                                                    매출월: p.매출월 !== undefined ? p.매출월 : (p.month !== undefined ? p.month : 1),
-                                                                }));
+                                                            const currentMode = isEditing
+                                                                ? calcMode
+                                                                : (quote.quote_type === 0 ? "PPC" : "DC");
+                                                            const finalProds = getFinalProducts(groupProducts as any[], currentMode) as any[];
 
                                                             const groupTotalSupply = finalProds.reduce((sum, p) => sum + (Number(p.공급가) || 0), 0);
                                                             const groupTotalMargin = finalProds.reduce((sum, p) => sum + (Number(p.마진) || 0), 0);
                                                             const groupMarginPercent = groupTotalSupply ? ((groupTotalMargin / groupTotalSupply) * 100).toFixed(1) : "0.0";
 
                                                             return (
-                                                                <div key={groupName} className="bg-white/95 dark:bg-gray-800/95 p-5 rounded-lg border border-blue-100 dark:border-blue-900/50 shadow-sm space-y-4">
-                                                                    <div className="flex justify-between items-center border-b dark:border-gray-700/60 pb-3">
-                                                                        <div className="flex items-center gap-4 flex-wrap">
+                                                                <div key={groupName} className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm space-y-4">
+                                                                    <div className="flex justify-between items-center border-b dark:border-gray-700 pb-3">
+                                                                        <div className="flex items-center gap-4 w-1/2">
                                                                             {isEditing ? (
                                                                                 <>
                                                                                     <div className="w-52">
                                                                                         <GroupNameInput value={groupName} onRename={(newName) => handleRenameGroup(groupName, newName)} />
                                                                                     </div>
-                                                                                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 px-2.5 py-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                                                                                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
                                                                                         <input
                                                                                             type="radio"
                                                                                             name={`defaultGroupSelection-${quote.id}`}
@@ -2156,7 +2093,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         <span className="font-semibold text-gray-700 dark:text-gray-300">기본 원가표</span>
                                                                                     </label>
                                                                                     {editDefaultGroup === groupName && (
-                                                                                        <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800/40 px-2.5 py-1.5 rounded hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors">
+                                                                                        <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800/40 px-2 py-1 rounded hover:bg-green-100 dark:hover:bg-green-900/40 transition-colors">
                                                                                             <input
                                                                                                 type="checkbox"
                                                                                                 checked={editSyncToGas}
@@ -2169,19 +2106,17 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                 </>
                                                                             ) : (
                                                                                 <div className="flex items-center gap-3">
-                                                                                    <h4 className="font-bold text-gray-800 dark:text-gray-200 text-lg flex items-center">
-                                                                                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block mr-2" />
+                                                                                    <h4 className="font-bold text-gray-800 dark:text-gray-200 text-lg">
                                                                                         {groupName}
                                                                                     </h4>
-                                                                                    {(((groupProducts as any[]).length > 0 && ((groupProducts as any[])[0] as any).group_default === 1) || quote.default_group_name === groupName) && (
-                                                                                        <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2.5 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400 ring-1 ring-inset ring-blue-500/10 dark:ring-blue-400/20">
+                                                                                    {(groupProducts as any[]).length > 0 && ((groupProducts as any[])[0] as any).group_default === 1 && (
+                                                                                        <span className="inline-flex items-center rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400 ring-1 ring-inset ring-blue-500/10 dark:ring-blue-400/20">
                                                                                             기본
                                                                                         </span>
                                                                                     )}
                                                                                 </div>
                                                                             )}
                                                                         </div>
-
                                                                         <div className="flex items-center gap-6">
                                                                             <div className="text-sm text-gray-500 dark:text-gray-400 flex gap-4">
                                                                                 <span>공급가 합계: <strong className="text-gray-800 dark:text-gray-200">₩{groupTotalSupply.toLocaleString()}</strong></span>
@@ -2200,10 +2135,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                                         <button
                                                                                             type="button"
                                                                                             onClick={() => handleRemoveGroup(groupName)}
-                                                                                            className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 h-8 px-2.5 border border-red-200 dark:border-red-800/40 rounded"
+                                                                                            className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 h-8 px-2.5"
                                                                                             title="그룹 삭제"
                                                                                         >
-                                                                                            <Trash2 className="w-3.5 h-3.5 mr-1" /> 그룹 삭제
+                                                                                            <Trash2 className="w-4 h-4 mr-1" /> 그룹 삭제
                                                                                         </button>
                                                                                     )}
                                                                                 </div>
@@ -2211,21 +2146,28 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         </div>
                                                                     </div>
 
-                                                                    <ProductTable
-                                                                        rawProducts={groupProducts as any[]}
-                                                                        finalProducts={finalProds}
-                                                                        isEditable={isEditing}
-                                                                        calcMode={calcMode}
-                                                                        masterProducts={loaderData.masterProducts}
-                                                                        onChangeProduct={(idx, field, value) => handleProductChange(groupName, idx, field, value)}
-                                                                        onRemoveProduct={(idx) => handleRemoveProduct(groupName, idx)}
-                                                                    />
+                                                                    {(groupProducts as any[]).length === 0 ? (
+                                                                        <div className="p-6 text-center text-gray-500 dark:text-gray-400">
+                                                                            추가된 제품이 없습니다.
+                                                                        </div>
+                                                                    ) : (
+                                                                        <ProductTable
+                                                                            rawProducts={groupProducts as any[]}
+                                                                            finalProducts={finalProds}
+                                                                            isEditable={isEditing}
+                                                                            calcMode={currentMode}
+                                                                            masterProducts={loaderData.masterProducts}
+                                                                            vendorFilter={quote.vendor}
+                                                                            onChangeProduct={(idx, field, value) => handleProductChange(groupName, idx, field, value)}
+                                                                            onRemoveProduct={(idx) => handleRemoveProduct(groupName, idx)}
+                                                                        />
+                                                                    )}
                                                                 </div>
                                                             );
                                                         })}
 
-                                                        {/* 엑셀 다운로드 버튼 */}
-                                                        <div className="flex justify-end pt-2">
+                                                        {/* 원가표/견적서 다운로드 버튼 (오른쪽 아래) */}
+                                                        <div className="flex justify-end mt-4">
                                                             <button
                                                                 type="button"
                                                                 onClick={() =>
@@ -2233,9 +2175,7 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                                         quote,
                                                                         editingQuoteId === quote.id
                                                                             ? editProducts
-                                                                            : (Array.isArray(quote.productsList)
-                                                                                ? { "원가표1": quote.productsList }
-                                                                                : quote.productsList),
+                                                                            : quote.productsList,
                                                                         editingQuoteId === quote.id
                                                                             ? editProjectName
                                                                             : quote.project_name,
@@ -2248,6 +2188,116 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                                             </button>
                                                         </div>
                                                     </div>
+
+                                                    {/* 2. 비고 리스트 */}
+                                                    {(editingQuoteId ===
+                                                        quote.id ||
+                                                        (quote.noteList &&
+                                                            quote.noteList
+                                                                .length >
+                                                            0)) && (
+                                                            <div className="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm">
+                                                                <div className="flex justify-between items-center mb-4">
+                                                                    <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg">
+                                                                        <FileText className="w-5 h-5 mr-2 text-gray-500" />
+                                                                        비고
+                                                                    </h3>
+                                                                    {editingQuoteId ===
+                                                                        quote.id && (
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={
+                                                                                    handleAddNote
+                                                                                }
+                                                                                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 h-8 px-3 shadow-sm"
+                                                                            >
+                                                                                <Plus className="w-4 h-4 mr-1" />{" "}
+                                                                                비고
+                                                                                추가
+                                                                            </button>
+                                                                        )}
+                                                                </div>
+
+                                                                {editingQuoteId ===
+                                                                    quote.id ? (
+                                                                    <div className="space-y-2">
+                                                                        {editNotes.map(
+                                                                            (
+                                                                                note,
+                                                                                idx,
+                                                                            ) => (
+                                                                                <div
+                                                                                    key={
+                                                                                        idx
+                                                                                    }
+                                                                                    className="flex items-start gap-2"
+                                                                                >
+                                                                                    <span className="text-gray-400 mt-2 text-sm">
+                                                                                        •
+                                                                                    </span>
+                                                                                    <textarea
+                                                                                        value={
+                                                                                            note
+                                                                                        }
+                                                                                        onChange={(
+                                                                                            e,
+                                                                                        ) =>
+                                                                                            handleNoteChange(
+                                                                                                idx,
+                                                                                                e
+                                                                                                    .target
+                                                                                                    .value,
+                                                                                            )
+                                                                                        }
+                                                                                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow min-h-[40px] resize-y"
+                                                                                        placeholder="비고 내용을 입력하세요"
+                                                                                    />
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={() =>
+                                                                                            handleRemoveNote(
+                                                                                                idx,
+                                                                                            )
+                                                                                        }
+                                                                                        className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-8 h-8 mt-1"
+                                                                                    >
+                                                                                        <Trash2 className="w-4 h-4" />
+                                                                                    </button>
+                                                                                </div>
+                                                                            ),
+                                                                        )}
+                                                                        {editNotes.length ===
+                                                                            0 && (
+                                                                                <div className="text-center text-gray-500 dark:text-gray-400 py-6 border border-dashed border-gray-300 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/50">
+                                                                                    추가된
+                                                                                    비고가
+                                                                                    없습니다.
+                                                                                </div>
+                                                                            )}
+                                                                    </div>
+                                                                ) : (
+                                                                    <ul className="list-disc pl-5 text-sm text-gray-600 dark:text-gray-400 space-y-1.5">
+                                                                        {quote.noteList.map(
+                                                                            (
+                                                                                noteText: string,
+                                                                                idx: number,
+                                                                            ) => (
+                                                                                <li
+                                                                                    key={
+                                                                                        idx
+                                                                                    }
+                                                                                    className="whitespace-pre-wrap leading-relaxed"
+                                                                                >
+                                                                                    {
+                                                                                        noteText
+                                                                                    }
+                                                                                </li>
+                                                                            ),
+                                                                        )}
+                                                                    </ul>
+                                                                )}
+                                                            </div>
+                                                        )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -2337,10 +2387,10 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                                 {isModalDone
                                     ? "작업 완료!"
                                     : fetcher.json?.intent === "updateStage"
-                                        ? "영업 단계 변경 진행 중"
-                                        : fetcher.json?.intent === "delete"
-                                            ? "견적 삭제 진행 중"
-                                            : "견적 저장 및 동기화 중"}
+                                    ? "영업 단계 변경 진행 중"
+                                    : fetcher.json?.intent === "delete"
+                                    ? "견적 삭제 진행 중"
+                                    : "견적 저장 및 동기화 중"}
                             </h3>
                             <p className="text-sm text-gray-500 dark:text-gray-400">
                                 {isModalDone
@@ -2386,359 +2436,14 @@ export default function Home({ loaderData }: Route.ComponentProps) {
                 </div>
             )}
 
-            {/* 🏆 오더 컨디션 확인 모달 (history.tsx와 100% 동일한 UI/기능 및 기존 데이터 로딩 적용) */}
-            {orderConfirmModalData && (
-                <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
-                        {/* Header */}
-                        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-850">
-                            <div>
-                                <h3 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                                    <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                                    오더 컨디션 확인
-                                </h3>
-                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                    선택하신 영업 단계 ({orderConfirmModalData.targetStage}%) 저장을 위한 추가 조건 및 라인 정보를 입력해주세요.
-                                </p>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setOrderConfirmModalData(null)}
-                                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors text-xl font-bold p-1"
-                            >
-                                ✕
-                            </button>
-                        </div>
-
-                        {/* Body */}
-                        <div className="px-6 py-5 overflow-y-auto space-y-6 flex-1">
-                            {/* 1. 상단 기본 4대 항목 그리드 */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg border border-gray-200 dark:border-gray-700">
-                                {/* 납부조건 */}
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                                        납부조건
-                                    </label>
-                                    <select
-                                        value={orderConfirmModalData.paymentCondition}
-                                        onChange={(e) => {
-                                            const val = Number(e.target.value);
-                                            setOrderConfirmModalData((prev) => {
-                                                if (!prev) return null;
-                                                // 일시납(1) 선택 시 수금조건도 일시납(1)로 고정
-                                                const nextBilling = val === 1 ? 1 : prev.billingCondition;
-                                                return {
-                                                    ...prev,
-                                                    paymentCondition: val,
-                                                    billingCondition: nextBilling,
-                                                };
-                                            });
-                                        }}
-                                        className="w-full text-xs px-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                                    >
-                                        <option value={1}>일시납</option>
-                                        <option value={2}>분할납부</option>
-                                    </select>
-                                </div>
-
-                                {/* 수금조건 */}
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                                        수금조건
-                                    </label>
-                                    <select
-                                        value={orderConfirmModalData.billingCondition}
-                                        disabled={orderConfirmModalData.paymentCondition === 1}
-                                        onChange={(e) => {
-                                            const val = Number(e.target.value);
-                                            setOrderConfirmModalData((prev) => (prev ? { ...prev, billingCondition: val } : null));
-                                        }}
-                                        className={`w-full text-xs px-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:outline-none ${
-                                            orderConfirmModalData.paymentCondition === 1 ? "opacity-60 cursor-not-allowed bg-gray-100 dark:bg-gray-800" : ""
-                                        }`}
-                                    >
-                                        <option value={1}>일시납</option>
-                                        <option value={2}>분할납부(재견적)</option>
-                                        <option value={3}>분할납부(환햇징)</option>
-                                    </select>
-                                </div>
-
-                                {/* Quote# */}
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                                        Quote#
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="Quote 번호 입력"
-                                        value={orderConfirmModalData.quoteNumber}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
-                                            setOrderConfirmModalData((prev) => (prev ? { ...prev, quoteNumber: val } : null));
-                                        }}
-                                        className="w-full text-xs px-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                                    />
-                                </div>
-
-                                {/* PO# */}
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
-                                        PO#
-                                    </label>
-                                    <input
-                                        type="text"
-                                        placeholder="PO 번호 입력"
-                                        value={orderConfirmModalData.poNumber}
-                                        onChange={(e) => {
-                                            const val = e.target.value;
-                                            setOrderConfirmModalData((prev) => (prev ? { ...prev, poNumber: val } : null));
-                                        }}
-                                        className="w-full text-xs px-3 py-2 border rounded-md border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:outline-none"
-                                    />
-                                </div>
-                            </div>
-
-                            {/* 2. 하단 기본 그룹 라인 수정 테이블 */}
-                            <div>
-                                <h4 className="text-xs font-bold text-gray-800 dark:text-gray-200 mb-2 flex items-center justify-between">
-                                    <span>기본 그룹 라인 데이터 수치 확인 및 수정</span>
-                                    <span className="text-[11px] font-normal text-gray-500 dark:text-gray-400">
-                                        * 제품코드를 제외한 항목 수정 가능 (마진 자동 계산)
-                                    </span>
-                                </h4>
-
-                                <div className="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                                    <table className="w-full text-left text-xs">
-                                        <thead className="bg-gray-100 dark:bg-gray-700/60 text-gray-700 dark:text-gray-300 font-semibold border-b border-gray-200 dark:border-gray-700">
-                                            <tr>
-                                                <th className="p-2.5 w-16 text-center">매출년</th>
-                                                <th className="p-2.5 w-16 text-center">매출월</th>
-                                                <th className="p-2.5 min-w-[120px]">제품코드</th>
-                                                <th className="p-2.5 w-24 text-right">달러net ($)</th>
-                                                <th className="p-2.5 w-24 text-right">환율 (₩)</th>
-                                                <th className="p-2.5 w-32 text-right">공급가 (₩)</th>
-                                                <th className="p-2.5 min-w-[140px] text-right">마진</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-200 dark:divide-gray-700 bg-white dark:bg-gray-800">
-                                            {orderConfirmModalData.lines.map((line, idx) => {
-                                                const netdollarNum = Number(line.달러net) || 0;
-                                                const exRateNum = Number(line.환율) || 0;
-                                                const supplyPriceNum = Number(line.공급가) || 0;
-                                                const calcMargin = supplyPriceNum - (netdollarNum * exRateNum);
-                                                const calcMarginRate = supplyPriceNum > 0 ? ((calcMargin / supplyPriceNum) * 100).toFixed(1) : "0.0";
-
-                                                return (
-                                                    <tr key={line.id || idx} className="hover:bg-gray-50 dark:hover:bg-gray-750">
-                                                        {/* 매출년 */}
-                                                        <td className="p-1.5">
-                                                            <input
-                                                                type="number"
-                                                                value={line.년차}
-                                                                onChange={(e) => {
-                                                                    const val = Number(e.target.value);
-                                                                    setOrderConfirmModalData((prev) => {
-                                                                        if (!prev) return null;
-                                                                        const updatedLines = [...prev.lines];
-                                                                        updatedLines[idx] = { ...updatedLines[idx], 년차: val };
-                                                                        return { ...prev, lines: updatedLines };
-                                                                    });
-                                                                }}
-                                                                className="w-full text-center py-1 px-1.5 border rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs"
-                                                            />
-                                                        </td>
-                                                        {/* 매출월 */}
-                                                        <td className="p-1.5">
-                                                            <input
-                                                                type="number"
-                                                                min={1}
-                                                                max={12}
-                                                                value={line.매출월}
-                                                                onChange={(e) => {
-                                                                    const val = Number(e.target.value);
-                                                                    setOrderConfirmModalData((prev) => {
-                                                                        if (!prev) return null;
-                                                                        const updatedLines = [...prev.lines];
-                                                                        updatedLines[idx] = { ...updatedLines[idx], 매출월: val };
-                                                                        return { ...prev, lines: updatedLines };
-                                                                    });
-                                                                }}
-                                                                className="w-full text-center py-1 px-1.5 border rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs"
-                                                            />
-                                                        </td>
-                                                        {/* 제품코드 (Readonly) */}
-                                                        <td className="p-2.5 font-medium text-gray-800 dark:text-gray-200 truncate max-w-[140px]">
-                                                            {line.제품코드 || "-"}
-                                                        </td>
-                                                        {/* 달러net */}
-                                                        <td className="p-1.5">
-                                                            <input
-                                                                type="number"
-                                                                value={line.달러net}
-                                                                onChange={(e) => {
-                                                                    const val = Number(e.target.value);
-                                                                    setOrderConfirmModalData((prev) => {
-                                                                        if (!prev) return null;
-                                                                        const updatedLines = [...prev.lines];
-                                                                        updatedLines[idx] = { ...updatedLines[idx], 달러net: val };
-                                                                        return { ...prev, lines: updatedLines };
-                                                                    });
-                                                                }}
-                                                                className="w-full text-right py-1 px-1.5 border rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs"
-                                                            />
-                                                        </td>
-                                                        {/* 환율 */}
-                                                        <td className="p-1.5">
-                                                            <input
-                                                                type="number"
-                                                                value={line.환율}
-                                                                onChange={(e) => {
-                                                                    const val = Number(e.target.value);
-                                                                    setOrderConfirmModalData((prev) => {
-                                                                        if (!prev) return null;
-                                                                        const updatedLines = [...prev.lines];
-                                                                        updatedLines[idx] = { ...updatedLines[idx], 환율: val };
-                                                                        return { ...prev, lines: updatedLines };
-                                                                    });
-                                                                }}
-                                                                className="w-full text-right py-1 px-1.5 border rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs"
-                                                            />
-                                                        </td>
-                                                        {/* 공급가 */}
-                                                        <td className="p-1.5">
-                                                            <input
-                                                                type="number"
-                                                                value={line.공급가}
-                                                                onChange={(e) => {
-                                                                    const val = Number(e.target.value);
-                                                                    setOrderConfirmModalData((prev) => {
-                                                                        if (!prev) return null;
-                                                                        const updatedLines = [...prev.lines];
-                                                                        updatedLines[idx] = { ...updatedLines[idx], 공급가: val };
-                                                                        return { ...prev, lines: updatedLines };
-                                                                    });
-                                                                }}
-                                                                className="w-full text-right py-1 px-1.5 border rounded border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-xs font-semibold text-blue-600 dark:text-blue-400"
-                                                            />
-                                                        </td>
-                                                        {/* 마진 (자동 계산) */}
-                                                        <td className="p-2.5 text-right font-medium text-gray-700 dark:text-gray-300">
-                                                            <span className={calcMargin >= 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
-                                                                ₩{Math.round(calcMargin).toLocaleString()} ({calcMarginRate}%)
-                                                            </span>
-                                                        </td>
-                                                    </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Footer */}
-                        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-850 flex justify-end gap-3">
-                            <button
-                                type="button"
-                                onClick={() => setOrderConfirmModalData(null)}
-                                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors"
-                            >
-                                취소
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    if (orderConfirmModalData.isEditIntent && orderConfirmModalData.editPayload) {
-                                        const payload = {
-                                            ...orderConfirmModalData.editPayload,
-                                            payment_condition: orderConfirmModalData.paymentCondition,
-                                            billing_condition: orderConfirmModalData.billingCondition,
-                                            quote_number: orderConfirmModalData.quoteNumber,
-                                            po_number: orderConfirmModalData.poNumber,
-                                        };
-
-                                        if (payload.products && orderConfirmModalData.lines) {
-                                            const linesMap = new Map();
-                                            orderConfirmModalData.lines.forEach((l: any) => linesMap.set(Number(l.id), l));
-
-                                            const updatedProductsObj: Record<string, any[]> = {};
-                                            for (const [gName, prods] of Object.entries(payload.products)) {
-                                                if (Array.isArray(prods)) {
-                                                    updatedProductsObj[gName] = prods.map((p: any) => {
-                                                        const lineId = p.line_id !== undefined ? p.line_id : p.id;
-                                                        const matched = linesMap.get(Number(lineId));
-                                                        if (matched) {
-                                                            const netdollarNum = Number(matched.달러net || matched.netdollar) || 0;
-                                                            const exRateNum = Number(matched.환율 || matched.exchange_rate) || 0;
-                                                            const supplyPriceNum = Number(matched.공급가 || matched.supply_price) || 0;
-                                                            const yearNum = Number(matched.년차 || matched.year) || 1;
-                                                            const monthNum = Number(matched.매출월 || matched.month) || 1;
-                                                            const marginNum = supplyPriceNum - (netdollarNum * exRateNum);
-                                                            const marginRateNum = supplyPriceNum > 0 ? parseFloat(((marginNum / supplyPriceNum) * 100).toFixed(1)) : 0;
-
-                                                            return {
-                                                                ...p,
-                                                                년차: yearNum,
-                                                                year: yearNum,
-                                                                매출월: monthNum,
-                                                                month: monthNum,
-                                                                달러net: netdollarNum,
-                                                                netdollar: netdollarNum,
-                                                                환율: exRateNum,
-                                                                exchange_rate: exRateNum,
-                                                                공급가: supplyPriceNum,
-                                                                supply_price: supplyPriceNum,
-                                                                마진: marginNum,
-                                                                margin: marginNum,
-                                                                마진율: marginRateNum,
-                                                                margin_rate: marginRateNum,
-                                                            };
-                                                        }
-                                                        return p;
-                                                    });
-                                                } else {
-                                                    updatedProductsObj[gName] = prods as any[];
-                                                }
-                                            }
-                                            payload.products = updatedProductsObj;
-                                        }
-
-                                        fetcher.submit(payload, { method: "post", encType: "application/json" });
-                                    } else {
-                                        fetcher.submit(
-                                            {
-                                                intent: "updateStage",
-                                                quoteId: orderConfirmModalData.quoteId,
-                                                stage: orderConfirmModalData.targetStage,
-                                                isOrdered: 1,
-                                                isLost: 0,
-                                                payment_condition: orderConfirmModalData.paymentCondition,
-                                                billing_condition: orderConfirmModalData.billingCondition,
-                                                quote_number: orderConfirmModalData.quoteNumber,
-                                                po_number: orderConfirmModalData.poNumber,
-                                                lines: JSON.stringify(orderConfirmModalData.lines),
-                                            },
-                                            { method: "post", encType: "application/json" }
-                                        );
-                                    }
-                                    setOrderConfirmModalData(null);
-                                }}
-                                className="px-5 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow transition-colors"
-                            >
-                                확인 및 완료
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
             {/* 성공 / 에러 전용 트렌디한 Toast 컴포넌트 (우측 하단) */}
             {toast && toast.type !== "info" && (
                 <div
-                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${toast.type === "error"
-                        ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200"
-                        : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"
-                        } transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
+                    className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-lg shadow-xl border ${
+                        toast.type === "error" 
+                            ? "bg-red-50 border-red-200 text-red-800 dark:bg-red-950/80 dark:border-red-800 dark:text-red-200" 
+                            : "bg-gray-900 border-gray-800 text-white dark:bg-gray-100 dark:border-gray-200 dark:text-gray-900"
+                    } transition-all duration-300 animate-in slide-in-from-bottom-5 fade-in`}
                 >
                     {toast.type === "error" ? (
                         <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400" />
@@ -2760,3 +2465,4 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
         </div>
     );
 }
+0;

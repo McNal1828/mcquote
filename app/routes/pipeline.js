@@ -48,14 +48,15 @@ function doPost(e) {
                     requestData.partner,                                                         // J열: Partner
                     requestData.contact,                                                         // K열: Contact
                     requestData.account,                                                         // L열: Account
-                    '',                                                                          // M열: 빈 값
+                    requestData.projectCode || '',                                               // M열: Project Code
                     requestData.stage,                                                           // N열: Stage
                     requestData.netdollar,                                                       // O열: Net Dollar
                     requestData.price,                                                           // P열: 금액 (Price)
                     requestData.margin,                                                          // Q열: 마진 (Margin)
                     `=Q${nextRow}/P${nextRow}`,                                                  // R열: 마진율 수식 (Q열 마진 / P열 금액)
-                    '',                                                                          // S열
-                    ''                                                                           // T열
+                    requestData.note || '',                                                      // S열: 대표비고
+                    '',                                                                          // T열: 빈 값
+                    ''                                                                           // U열: 빈 값
                 ];
 
                 // ① 행 데이터 추가
@@ -115,13 +116,19 @@ function doPost(e) {
         if (action === 'update') {
             const targetId = String(requestData.id);
             const targetStage = requestData.stage;
+            const targetNote = requestData.note;
             const values = sheet.getDataRange().getValues();
             let updatedCount = 0;
 
-            // D열(3번 인덱스)의 ID 기준 탐색 및 N열(14번째 열, 13번 인덱스)의 Stage 값 업데이트
+            // D열(3번 인덱스)의 ID 기준 탐색 및 N열(Stage), S열(대표비고) 업데이트
             for (let i = 1; i < values.length; i++) {
                 if (String(values[i][3]) === targetId) {
-                    sheet.getRange(i + 1, 14).setValue(targetStage);
+                    if (targetStage !== undefined && targetStage !== null) {
+                        sheet.getRange(i + 1, 14).setValue(targetStage); // N열 Stage
+                    }
+                    if (targetNote !== undefined && targetNote !== null) {
+                        sheet.getRange(i + 1, 19).setValue(targetNote); // S열 대표비고
+                    }
                     updatedCount++;
                 }
             }
@@ -129,7 +136,7 @@ function doPost(e) {
             if (updatedCount > 0) {
                 return responseJSON({
                     status: 'success',
-                    message: `${updatedCount}개의 행의 Stage가 업데이트되었습니다.`
+                    message: `${updatedCount}개의 행 정보가 업데이트되었습니다.`
                 });
             } else {
                 return responseJSON({
@@ -159,17 +166,46 @@ function doPost(e) {
                     }
                 }
 
-                // ② 일괄 영업 단계 수정 (updateRows)
+                // ② 일괄 영업 단계, 수치 및 비고 수정 (updateRows)
                 if (requestData.updateRows && requestData.updateRows.length > 0) {
                     const updateMap = {};
                     requestData.updateRows.forEach(row => {
-                        updateMap[String(row.id)] = row.stage;
+                        updateMap[String(row.id)] = row;
                     });
 
                     for (let i = 1; i < values.length; i++) {
                         const targetIdStr = String(values[i][3]);
-                        if (updateMap[targetIdStr] !== undefined) {
-                            sheet.getRange(i + 1, 14).setValue(updateMap[targetIdStr]); // N열 Stage 수정
+                        const updateData = updateMap[targetIdStr];
+                        if (updateData !== undefined) {
+                            const rowIdx = i + 1;
+                            if (updateData.year !== undefined && updateData.year !== null) {
+                                sheet.getRange(rowIdx, 1).setValue(updateData.year); // A열: 매출년
+                            }
+                            if (updateData.month !== undefined && updateData.month !== null) {
+                                sheet.getRange(rowIdx, 2).setValue(updateData.month); // B열: 매출월
+                                sheet.getRange(rowIdx, 3).setFormula(`="Q" & CHOOSE(B${rowIdx}, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4)`); // C열: 분기 수식
+                            }
+                            if (updateData.projectCode !== undefined && updateData.projectCode !== null) {
+                                sheet.getRange(rowIdx, 13).setValue(updateData.projectCode); // M열 Project Code 수정
+                            }
+                            if (updateData.stage !== undefined && updateData.stage !== null) {
+                                sheet.getRange(rowIdx, 14).setValue(updateData.stage); // N열 Stage 수정
+                            }
+                            if (updateData.netdollar !== undefined && updateData.netdollar !== null) {
+                                sheet.getRange(rowIdx, 15).setValue(updateData.netdollar); // O열 Net Dollar ($) 수정
+                            }
+                            if (updateData.price !== undefined && updateData.price !== null) {
+                                sheet.getRange(rowIdx, 16).setValue(updateData.price); // P열 공급가 (₩) 수정
+                            }
+                            if (updateData.margin !== undefined && updateData.margin !== null) {
+                                sheet.getRange(rowIdx, 17).setValue(updateData.margin); // Q열 마진 (₩) 수정
+                            }
+                            if (updateData.price !== undefined || updateData.margin !== undefined) {
+                                sheet.getRange(rowIdx, 18).setFormula(`=Q${rowIdx}/P${rowIdx}`); // R열 마진율 수식 갱신
+                            }
+                            if (updateData.note !== undefined && updateData.note !== null) {
+                                sheet.getRange(rowIdx, 19).setValue(updateData.note); // S열 대표비고 수정
+                            }
                         }
                     }
                 }
@@ -191,13 +227,13 @@ function doPost(e) {
                             rowPayload.partner,
                             rowPayload.contact,
                             rowPayload.account,
-                            '',
+                            rowPayload.projectCode || '', // M열 Project Code
                             rowPayload.stage, // N열 Stage
                             rowPayload.netdollar,
                             rowPayload.price,
                             rowPayload.margin,
                             `=Q${nextRow}/P${nextRow}`, // R열 마진율 수식
-                            '',
+                            rowPayload.note || '', // S열 대표비고
                             ''
                         ];
 

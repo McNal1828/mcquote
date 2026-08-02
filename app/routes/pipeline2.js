@@ -29,29 +29,39 @@ function handleInstallableEdit(e) {
     const col = range.getColumn();
     const row = range.getRow();
 
-    // P열(16번째: 공급가) 또는 Q열(17번째: 마진)이 수정되었으며 헤더가 아닌 데이터 행(2행 이상)인 경우
-    // N열(14번째: Stage), P열(16번째: 공급가), Q열(17번째: 마진)이 수정되었으며 헤더가 아닌 데이터 행(2행 이상)인 경우
-    if (row >= 2 && (col === 14 || col === 16 || col === 17)) {
+    // M열(13번째: Project Code), N열(14번째: Stage), O열(15번째: Net Dollar), P열(16번째: 공급가), Q열(17번째: 마진), S열(19번째: 대표비고)이 수정된 경우
+    if (row >= 2 && (col === 13 || col === 14 || col === 15 || col === 16 || col === 17 || col === 19)) {
       const id = sheet.getRange(row, 4).getValue(); // D열(4번째)의 고유 ID (quote_lines.id) 취득
       
       // ID가 빈값이면 동기화할 타겟을 잡을 수 없으므로 스킵
       if (!id) return;
 
+      const projectCode = sheet.getRange(row, 13).getValue(); // M열: Project Code
       const rawStage = sheet.getRange(row, 14).getValue();   // N열: Stage
+      const netdollar = sheet.getRange(row, 15).getValue();  // O열: Net Dollar ($) (netdollar)
       const supplyPrice = sheet.getRange(row, 16).getValue(); // P열: 공급가 수동 입력 값
       const margin = sheet.getRange(row, 17).getValue();       // Q열: 마진 수동 입력 값
+      const gasNote = sheet.getRange(row, 19).getValue();      // S열: 대표비고 (gasNote)
 
-      // 구글 시트의 Stage는 0.1(10%) 형태이므로 백분율 정수값(10)으로 변환
       const stageVal = (rawStage !== undefined && rawStage !== null && rawStage !== "") 
         ? Math.round(Number(rawStage) * 100) 
         : 10;
+
+      const netdollarNum = Number(netdollar) || 0;
+      const supplyPriceNum = Number(supplyPrice) || 0;
+      const marginNum = Number(margin) || 0;
+      const marginRateNum = supplyPriceNum > 0 ? parseFloat(((marginNum / supplyPriceNum) * 100).toFixed(1)) : 0;
 
       const payload = {
         apiKey: WEBAPP_SECRET_KEY,
         id: Number(id),
         stage: stageVal,
-        supplyPrice: Number(supplyPrice) || 0,
-        margin: Number(margin) || 0
+        netdollar: netdollarNum,
+        supplyPrice: supplyPriceNum,
+        margin: marginNum,
+        marginRate: marginRateNum,
+        gasNote: gasNote !== undefined && gasNote !== null ? String(gasNote) : "",
+        projectCode: projectCode !== undefined && projectCode !== null ? String(projectCode) : ""
       };
 
       const options = {
