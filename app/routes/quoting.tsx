@@ -27,6 +27,7 @@ import {
     CheckCircle2,
     Search,
     ChevronDown,
+    Copy,
 } from "lucide-react";
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -503,19 +504,25 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
         } as any);
     };
 
-    // 기본 정보 입력 핸들러
+    // 기본정보 폼 체인지 핸들러
     const handleBasicInfoChange = (
         e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
     ) => {
         const { name, value } = e.target;
-        // 벤더가 변경될 경우, AM과 제품 목록을 초기화하여 충돌을 방지합니다.
         if (name === "vendor") {
+            const hasData = Object.values(products).some(prods =>
+                prods.some(p => p.제품코드 || p.제품설명)
+            );
+            if (hasData && !window.confirm("벤더를 변경하면 입력한 제품 데이터가 초기화됩니다. 계속하시겠습니까?")) {
+                return;
+            }
             setBasicInfo((prev) => ({
                 ...prev,
                 vendor: value,
                 amId: "",
             }));
-            setProducts({ "원가표1": [createEmptyProductRow(defaultExchangeRate)] });
+            setProducts({ "일시불": [createEmptyProductRow(defaultExchangeRate)] });
+            setDefaultGroup("일시불");
             return;
         }
         setBasicInfo((prev) => {
@@ -556,11 +563,11 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 amId: "",
             };
         });
-        setProducts({ "원가표1": [createEmptyProductRow(defaultExchangeRate)] });
-        setDefaultGroup("원가표1");
+        setProducts({ "일시불": [createEmptyProductRow(defaultExchangeRate)] });
+        setDefaultGroup("일시불");
     };
 
-    // 그룹 추가/삭제/이름수정 핸들러
+    // 그룹 추가/복제/삭제/이름수정 핸들러
     const handleAddGroup = () => {
         setProducts((prev) => {
             let idx = 1;
@@ -638,6 +645,21 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
             ...prev,
             [groupName]: (prev[groupName] || []).filter((_, i) => i !== index),
         }));
+    };
+
+    const handleDuplicateProduct = (groupName: string, index: number) => {
+        setProducts((prev) => {
+            const list = prev[groupName] || [];
+            const targetItem = list[index];
+            if (!targetItem) return prev;
+            const duplicatedItem = { ...targetItem };
+            const newList = [...list];
+            newList.splice(index + 1, 0, duplicatedItem);
+            return {
+                ...prev,
+                [groupName]: newList,
+            };
+        });
     };
 
     const handleProductChange = (
@@ -1197,27 +1219,27 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                 {/* 2. 견적 상세 테이블 */}
                 <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-                            <div className="flex items-center gap-4 flex-wrap">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg whitespace-nowrap">
+                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 w-full">
+                            <div className="flex items-center gap-4 flex-1 min-w-0 w-full lg:w-auto">
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-lg whitespace-nowrap flex-shrink-0">
                                     <Package className="w-5 h-5 mr-2 text-gray-500" />{" "}
                                     견적 상세 설정
                                 </h3>
-                                {/* 대표비고 입력창 */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                                {/* 대표비고 입력창 (남은 공간을 flex-1로 채움) */}
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap flex-shrink-0">
                                         대표비고:
                                     </span>
                                     <input
                                         type="text"
                                         value={gasNote}
                                         onChange={(e) => setGasNote(e.target.value)}
-                                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64 md:w-80"
+                                        className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1 min-w-0 w-full"
                                         placeholder="대표 비고를 입력하세요 (Google Sheet 전송용)"
                                     />
                                 </div>
                             </div>
-                            <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-4 flex-shrink-0">
                                 {/* 계산 기준 선택 영역 */}
                                 <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-700/50 p-1.5 rounded border border-gray-200 dark:border-gray-600">
                                     <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 ml-2">
@@ -1291,6 +1313,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                         const finalProds = getFinalProducts(groupProducts, calcMode) as any[];
 
                         // 그룹별 합계 계산
+                        const groupTotalNetUsd = finalProds.reduce((sum, p) => sum + (Number(p.달러net) || 0), 0);
                         const groupTotalSupply = finalProds.reduce((sum, p) => sum + (Number(p.공급가) || 0), 0);
                         const groupTotalMargin = finalProds.reduce((sum, p) => sum + (Number(p.마진) || 0), 0);
                         const groupMarginPercent = groupTotalSupply ? ((groupTotalMargin / groupTotalSupply) * 100).toFixed(1) : "0.0";
@@ -1329,6 +1352,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                     </div>
                                     <div className="flex items-center gap-6">
                                         <div className="text-sm text-gray-500 dark:text-gray-400 flex gap-4">
+                                            <span>달러net 합계: <strong className="text-gray-800 dark:text-gray-200">${groupTotalNetUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
                                             <span>공급가 합계: <strong className="text-gray-800 dark:text-gray-200">₩{groupTotalSupply.toLocaleString()}</strong></span>
                                             <span>마진 합계: <strong className="text-green-600 dark:text-green-400">₩{groupTotalMargin.toLocaleString()} ({groupMarginPercent}%)</strong></span>
                                         </div>
@@ -1340,14 +1364,22 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                             >
                                                 <Plus className="w-3.5 h-3.5 mr-1" /> 제품 추가
                                             </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDuplicateGroup(groupName)}
+                                                className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 dark:hover:bg-blue-900/50 h-8 px-2.5 border border-blue-200 dark:border-blue-800"
+                                                title="그룹 복제"
+                                            >
+                                                <Copy className="w-3.5 h-3.5 mr-1" /> 그룹 복제
+                                            </button>
                                             {Object.keys(products).length > 1 && (
                                                 <button
                                                     type="button"
                                                     onClick={() => handleRemoveGroup(groupName)}
-                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 h-8 px-2.5"
+                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 h-8 px-2.5 border border-red-200 dark:border-red-800/40 rounded"
                                                     title="그룹 삭제"
                                                 >
-                                                    <Trash2 className="w-4 h-4 mr-1" /> 그룹 삭제
+                                                    <Trash2 className="w-3.5 h-3.5 mr-1" /> 그룹 삭제
                                                 </button>
                                             )}
                                         </div>
@@ -1368,6 +1400,7 @@ export default function Quoting({ loaderData }: Route.ComponentProps) {
                                         vendorFilter={basicInfo.vendor}
                                         onChangeProduct={(idx, field, value) => handleProductChange(groupName, idx, field, value)}
                                         onRemoveProduct={(idx) => handleRemoveProduct(groupName, idx)}
+                                        onDuplicateProduct={(idx) => handleDuplicateProduct(groupName, idx)}
                                     />
                                 )}
                             </div>

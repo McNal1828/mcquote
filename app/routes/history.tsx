@@ -25,6 +25,7 @@ import {
     Search,
     ChevronDown,
     Download,
+    Copy,
 } from "lucide-react";
 
 export async function action({ request, params }: Route.ActionArgs) {
@@ -307,7 +308,7 @@ export async function action({ request, params }: Route.ActionArgs) {
             `);
 
             const selectProduct = db.prepare("SELECT id FROM products WHERE code = ?");
-            const groups = Array.isArray(products) ? { "원가표1": products } : products;
+            const groups = Array.isArray(products) ? { "일시불": products } : products;
 
             for (const [groupName, prods] of Object.entries(groups)) {
                 if (!Array.isArray(prods)) continue;
@@ -768,7 +769,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
         if ((!productsObj || Object.keys(productsObj).length === 0) && quoteObj && Array.isArray(quoteObj.products)) {
             const grouped: Record<string, any[]> = {};
             quoteObj.products.forEach((p: any) => {
-                const gName = p.group_name || "원가표1";
+                const gName = p.group_name || "일시불";
                 if (!grouped[gName]) grouped[gName] = [];
                 grouped[gName].push(p);
             });
@@ -875,7 +876,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
         setEditContractType(quote.contract_type || "");
         setEditVendor(quote.vendor ? quote.vendor.split(",")[0] : "Broadcom");
 
-        const initialProducts = Object.keys(currentProducts).length > 0 ? currentProducts : { "원가표1": [] };
+        const initialProducts = Object.keys(currentProducts).length > 0 ? currentProducts : { "일시불": [] };
         setEditProducts(JSON.parse(JSON.stringify(initialProducts)));
         setCalcMode(quote.quote_type === 0 ? "PPC" : "DC");
         setEditGasNote(quote.gas_note || "");
@@ -919,8 +920,8 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
         setEditAmId("");
         setEditPartnerId("");
         setEditPartnerContactId("");
-        setEditProducts({ "원가표1": [createEmptyProductRow(defaultExchangeRate)] });
-        setEditDefaultGroup("원가표1");
+        setEditProducts({ "일시불": [createEmptyProductRow(defaultExchangeRate)] });
+        setEditDefaultGroup("일시불");
     };
 
     const updateAllProductsStage = (newStage: number) => {
@@ -1092,12 +1093,34 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
 
     const handleAddGroup = () => {
         setEditProducts((prev) => {
-            let idx = 1;
-            while (`원가표${idx}` in prev) idx++;
-            const newGroupName = `원가표${idx}`;
+            let newGroupName = "일시불";
+            if ("일시불" in prev) {
+                let idx = 1;
+                while (`일시불${idx}` in prev) idx++;
+                newGroupName = `일시불${idx}`;
+            }
             return {
                 ...prev,
                 [newGroupName]: [createEmptyProductRow(defaultExchangeRate)],
+            };
+        });
+    };
+
+    const handleDuplicateGroup = (targetGroupName: string) => {
+        setEditProducts((prev) => {
+            const targetItems = prev[targetGroupName] || [];
+            const duplicatedItems = targetItems.map((item) => ({ ...item }));
+
+            let newGroupName = "일시불";
+            if ("일시불" in prev) {
+                let idx = 1;
+                while (`일시불${idx}` in prev) idx++;
+                newGroupName = `일시불${idx}`;
+            }
+
+            return {
+                ...prev,
+                [newGroupName]: duplicatedItems,
             };
         });
     };
@@ -1168,6 +1191,21 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
             return {
                 ...prev,
                 [groupName]: newProds,
+            };
+        });
+    };
+
+    const handleDuplicateProduct = (groupName: string, index: number) => {
+        setEditProducts((prev) => {
+            const list = prev[groupName] || [];
+            const targetItem = list[index];
+            if (!targetItem) return prev;
+            const duplicatedItem = { ...targetItem };
+            const newList = [...list];
+            newList.splice(index + 1, 0, duplicatedItem);
+            return {
+                ...prev,
+                [groupName]: newList,
             };
         });
     };
@@ -1621,33 +1659,35 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                 {/* 3. 견적 상세 헤더 (대표비고, 단계, 수정버튼) */}
                 <div className="bg-blue-50/70 dark:bg-blue-950/40 p-6 rounded-2xl border border-blue-200 dark:border-blue-800/60 shadow-sm space-y-6">
                     <div className="bg-white/95 dark:bg-gray-800/95 p-5 rounded-xl border border-blue-100 dark:border-blue-900/50 shadow-sm">
-                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-                            <div className="flex items-center gap-4 flex-wrap">
-                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-xl whitespace-nowrap">
+                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 w-full">
+                            <div className="flex items-center gap-4 flex-1 min-w-0 w-full lg:w-auto">
+                                <h3 className="font-bold text-gray-800 dark:text-gray-200 flex items-center text-xl whitespace-nowrap flex-shrink-0">
                                     <Package className="w-6 h-6 mr-2 text-gray-500" />
                                     견적 상세
                                 </h3>
 
-                                {/* 대표비고 표시/입력 */}
-                                <div className="flex items-center gap-2">
-                                    <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">대표비고:</span>
+                                {/* 대표비고 표시/입력 (남은 공간을 flex-1로 채움) */}
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap flex-shrink-0">대표비고:</span>
                                     {isEditing ? (
                                         <input
                                             type="text"
                                             value={editGasNote}
                                             onChange={(e) => setEditGasNote(e.target.value)}
-                                            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-[300px] md:w-[380px]"
+                                            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1 min-w-0 w-full"
                                             placeholder="대표 비고를 입력하세요"
                                         />
                                     ) : (
-                                        <span className="text-sm text-gray-700 dark:text-gray-300 font-medium px-3 py-1.5 bg-gray-50 dark:bg-gray-700/60 rounded border border-gray-200 dark:border-gray-600 inline-block min-w-[300px] md:min-w-[380px] truncate" title={displayGasNote}>
+                                        <span className="text-sm text-gray-700 dark:text-gray-300 font-medium px-3 py-1.5 bg-gray-50 dark:bg-gray-700/60 rounded border border-gray-200 dark:border-gray-600 flex-1 min-w-0 w-full truncate" title={displayGasNote}>
                                             {displayGasNote}
                                         </span>
                                     )}
                                 </div>
+                            </div>
 
+                            <div className="flex items-center gap-4 flex-shrink-0">
                                 {/* 단계 표시/입력 */}
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-shrink-0">
                                     <span className="text-sm font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">단계:</span>
                                     {isEditing ? (
                                         <select
@@ -1763,6 +1803,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                 매출월: p.매출월 !== undefined ? p.매출월 : (p.month !== undefined ? p.month : 1),
                             }));
 
+                        const groupTotalNetUsd = finalProds.reduce((sum, p) => sum + (Number(p.달러net) || 0), 0);
                         const groupTotalSupply = finalProds.reduce((sum, p) => sum + (Number(p.공급가) || 0), 0);
                         const groupTotalMargin = finalProds.reduce((sum, p) => sum + (Number(p.마진) || 0), 0);
                         const groupMarginPercent = groupTotalSupply ? ((groupTotalMargin / groupTotalSupply) * 100).toFixed(1) : "0.0";
@@ -1815,6 +1856,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
 
                                     <div className="flex items-center gap-6">
                                         <div className="text-sm text-gray-500 dark:text-gray-400 flex gap-4">
+                                            <span>달러net 합계: <strong className="text-gray-800 dark:text-gray-200">${groupTotalNetUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
                                             <span>공급가 합계: <strong className="text-gray-800 dark:text-gray-200">₩{groupTotalSupply.toLocaleString()}</strong></span>
                                             <span>마진 합계: <strong className="text-green-600 dark:text-green-400">₩{groupTotalMargin.toLocaleString()} ({groupMarginPercent}%)</strong></span>
                                         </div>
@@ -1826,6 +1868,14 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                                     className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 h-8 px-2.5 border border-blue-200 dark:border-blue-800"
                                                 >
                                                     <Plus className="w-3.5 h-3.5 mr-1" /> 제품 추가
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleDuplicateGroup(groupName)}
+                                                    className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 h-8 px-2.5 border border-blue-200 dark:border-blue-800"
+                                                    title="그룹 복제"
+                                                >
+                                                    <Copy className="w-3.5 h-3.5 mr-1" /> 그룹 복제
                                                 </button>
                                                 {Object.keys(editProducts).length > 1 && (
                                                     <button
@@ -1851,6 +1901,7 @@ export default function HistoryView({ loaderData }: Route.ComponentProps) {
                                     vendorFilter={currentVendor}
                                     onChangeProduct={(idx, field, value) => handleProductChange(groupName, idx, field, value)}
                                     onRemoveProduct={(idx) => handleRemoveProduct(groupName, idx)}
+                                    onDuplicateProduct={(idx) => handleDuplicateProduct(groupName, idx)}
                                 />
                             </div>
                         );

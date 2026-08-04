@@ -1,4 +1,4 @@
-import { Trash2 } from "lucide-react";
+import { Trash2, Copy } from "lucide-react";
 
 interface ProductTableProps {
   rawProducts: any[];         // 수정 가능한 원본 제품 배열 (e.g. groupProducts)
@@ -9,6 +9,7 @@ interface ProductTableProps {
   vendorFilter?: string;      // 벤더 필터링 조건
   onChangeProduct?: (idx: number, field: string, value: any) => void; // 값 변경 콜백
   onRemoveProduct?: (idx: number) => void;                            // 제품 삭제 콜백
+  onDuplicateProduct?: (idx: number) => void;                         // 제품 복제 콜백
 }
 
 export default function ProductTable({
@@ -20,10 +21,11 @@ export default function ProductTable({
   vendorFilter = "",
   onChangeProduct,
   onRemoveProduct,
+  onDuplicateProduct,
 }: ProductTableProps) {
   return (
     <div className="overflow-x-auto rounded-md border border-gray-200 dark:border-gray-700">
-      <table className="w-full text-sm text-left table-fixed min-w-[1380px]">
+      <table className="w-full text-xs text-left table-fixed min-w-[1380px]">
         <thead className="bg-gray-50 dark:bg-gray-800/80 text-gray-700 dark:text-gray-300 border-b dark:border-gray-700 whitespace-nowrap">
           <tr className="divide-x divide-gray-200 dark:divide-gray-700">
             <th className="p-2 font-semibold text-center w-16">매출년</th>
@@ -41,7 +43,7 @@ export default function ProductTable({
             <th className="p-2 font-semibold text-center w-28">마진(₩)</th>
             <th className="p-2 font-semibold text-center w-20">마진%</th>
             <th className="p-2 font-semibold text-center w-18">단계</th>
-            {isEditable && <th className="p-2 font-semibold text-center w-14">관리</th>}
+            {isEditable && <th className="p-2 font-semibold text-center w-20">관리</th>}
           </tr>
         </thead>
         <tbody>
@@ -316,14 +318,22 @@ export default function ProductTable({
 
                 {/* 16. 관리 */}
                 {isEditable && (
-                  <td className="p-1.5 text-center">
+                  <td className="p-1.5 text-center whitespace-nowrap space-x-1">
+                    <button
+                      type="button"
+                      onClick={() => onDuplicateProduct?.(idx)}
+                      className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors text-blue-600 hover:text-blue-800 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-900/40 w-6 h-6 shadow-sm border border-blue-200 dark:border-blue-800"
+                      title="복제"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
                     <button
                       type="button"
                       onClick={() => onRemoveProduct?.(idx)}
-                      className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-7 h-7"
+                      className="inline-flex items-center justify-center rounded-md text-xs font-medium transition-colors text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/30 w-6 h-6 shadow-sm border border-red-200 dark:border-red-800/50"
                       title="삭제"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </td>
                 )}
